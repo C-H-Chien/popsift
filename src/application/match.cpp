@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -24,9 +25,13 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <chrono>
 
 #ifdef USE_DEVIL
 #include <devil_cpp_wrapper.hpp>
+#endif
+#ifdef USE_OPENCV
+#include <opencv2/opencv.hpp>
 #endif
 #include "pgmread.h"
 
@@ -158,46 +163,73 @@ static void collectFilenames( list<string>& inputFiles, const boost::filesystem:
 
 SiftJob* process_image( const string& inputFile, PopSift& PopSift )
 {
-    unsigned char* image_data;
     SiftJob* job;
+    unsigned char* image_data;
+    int w = 0, h = 0;
+    bool image_loaded = false;
 
+    // Try DevIL first (if available and not forced to use pgmread)
 #ifdef USE_DEVIL
     if( ! pgmread_loading )
     {
         ilImage img;
-        if( img.Load( inputFile.c_str() ) == false ) {
-            cerr << "Could not load image " << inputFile << endl;
-            return 0;
+        if( img.Load( inputFile.c_str() ) == true ) {
+            if( img.Convert( IL_LUMINANCE ) == true ) {
+                w = img.Width();
+                h = img.Height();
+                cout << "Loading " << w << " x " << h << " image " << inputFile << " (DevIL)" << endl;
+                image_data = img.GetData();
+                image_loaded = true;
+                img.Clear();
+            } else {
+                cerr << "Failed converting image " << inputFile << " to unsigned greyscale image" << endl;
+            }
         }
-        if( img.Convert( IL_LUMINANCE ) == false ) {
-            cerr << "Failed converting image " << inputFile << " to unsigned greyscale image" << endl;
-            exit( -1 );
-        }
-        const auto w = img.Width();
-        const auto h = img.Height();
-        cout << "Loading " << w << " x " << h << " image " << inputFile << endl;
-        image_data = img.GetData();
-
-        // PopSift.init( w, h );
-        job = PopSift.enqueue( w, h, image_data );
-
-        img.Clear();
     }
-    else
 #endif
+
+    // Try OpenCV if DevIL failed or is not available
+    if( ! image_loaded )
     {
-        int h{};
-        int w{};
+#ifdef USE_OPENCV
+        if( ! pgmread_loading )
+        {
+            cv::Mat img = cv::imread( inputFile, cv::IMREAD_GRAYSCALE );
+            if( ! img.empty() ) {
+                w = img.cols;
+                h = img.rows;
+                cout << "Loading " << w << " x " << h << " image " << inputFile << " (OpenCV)" << endl;
+                
+                // Allocate memory and copy data
+                image_data = new unsigned char[w * h];
+                memcpy( image_data, img.data, w * h );
+                image_loaded = true;
+            }
+        }
+#endif
+    }
+
+    // Fall back to PGM reader if both DevIL and OpenCV failed
+    if( ! image_loaded )
+    {
+        cout << "Loading " << inputFile << " (PGM fallback)" << endl;
         image_data = readPGMfile( inputFile, w, h );
         if( image_data == nullptr ) {
-            exit( EXIT_FAILURE );
+            cerr << "Could not load image " << inputFile << " with any available method" << endl;
+            return nullptr;
         }
+        image_loaded = true;
+    }
 
-        // PopSift.init( w, h );
-        job = PopSift.enqueue( w, h, image_data );
-
+    // Process the loaded image
+    job = PopSift.enqueue( w, h, image_data );
+    
+    // Clean up memory (only if we allocated it ourselves)
+#ifdef USE_OPENCV
+    if( ! pgmread_loading && image_loaded ) {
         delete [] image_data;
     }
+#endif
 
     return job;
 }
@@ -214,7 +246,7 @@ int main(int argc, char **argv)
 
     try {
         parseargs( argc, argv, config, lFile, rFile ); // Parse command line
-        std::cout << lFile << " <-> " << rFile << std::endl;
+        // std::cout << lFile << " <-> " << rFile << std::endl;
     }
     catch (std::exception& e) {
         std::cout << e.what() << std::endl;
@@ -245,14 +277,22 @@ int main(int argc, char **argv)
     SiftJob* rJob = process_image( rFile, PopSift );
 
     popsift::FeaturesDev* lFeatures = lJob->getDev();
+    popsift::FeaturesDev* rFeatures = rJob->getDev();
+    
     cout << "Number of features:    " << lFeatures->getFeatureCount() << endl;
     cout << "Number of descriptors: " << lFeatures->getDescriptorCount() << endl;
-
-    popsift::FeaturesDev* rFeatures = rJob->getDev();
     cout << "Number of features:    " << rFeatures->getFeatureCount() << endl;
     cout << "Number of descriptors: " << rFeatures->getDescriptorCount() << endl;
 
-    lFeatures->match( rFeatures );
+    // Perform matching with CUDA timing
+    float match_time_ms = 0.0f;
+    lFeatures->match( rFeatures, &match_time_ms );
+
+    // Print timing information if requested
+    if( print_time_info ) {
+        std::cout << "GPU SIFT matching time: " << std::fixed << std::setprecision(2) 
+                  << match_time_ms << " ms" << std::endl;
+    }
 
     delete lFeatures;
     delete rFeatures;

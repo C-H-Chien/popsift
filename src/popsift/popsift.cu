@@ -318,6 +318,14 @@ void PopSift::extractDownloadLoop( )
 
         private_init( img->getWidth(), img->getHeight() );
 
+        // Create CUDA events for timing
+        cudaEvent_t start_event, end_event;
+        cudaEventCreate(&start_event);
+        cudaEventCreate(&end_event);
+
+        // Record start time
+        cudaEventRecord(start_event);
+
         p._pyramid->step1( _config, img );
         p._unused.push( img ); // uploaded input image no longer needed, release for reuse
 
@@ -326,6 +334,20 @@ void PopSift::extractDownloadLoop( )
         popsift::FeaturesHost* features = p._pyramid->get_descriptors( _config );
 
         cudaDeviceSynchronize();
+
+        // Record end time and calculate elapsed time
+        cudaEventRecord(end_event);
+        cudaEventSynchronize(end_event);
+        
+        float elapsed_time_ms = 0.0f;
+        cudaEventElapsedTime(&elapsed_time_ms, start_event, end_event);
+        
+        // Store timing in the job
+        job->setGpuTime(elapsed_time_ms);
+        
+        // Clean up CUDA events
+        cudaEventDestroy(start_event);
+        cudaEventDestroy(end_event);
 
         bool log_to_file = ( _config.getLogMode() == popsift::Config::All );
         if( log_to_file ) {
@@ -386,6 +408,7 @@ SiftJob::SiftJob( int w, int h, const unsigned char* imageData )
     : _w(w)
     , _h(h)
     , _img(nullptr)
+    , _gpu_time_ms(0.0f)
 {
     _f = _p.get_future();
 
@@ -407,6 +430,7 @@ SiftJob::SiftJob( int w, int h, const float* imageData )
     : _w(w)
     , _h(h)
     , _img(nullptr)
+    , _gpu_time_ms(0.0f)
 {
     _f = _p.get_future();
 
@@ -473,6 +497,16 @@ popsift::FeaturesDev* SiftJob::getDev()
 void SiftJob::setError(std::exception_ptr ptr)
 {
     this->_err = ptr;
+}
+
+void SiftJob::setGpuTime(float gpu_time_ms)
+{
+    _gpu_time_ms = gpu_time_ms;
+}
+
+float SiftJob::getGpuTime() const
+{
+    return _gpu_time_ms;
 }
 
 void PopSift::Pipe::uninit()

@@ -43,6 +43,7 @@ class SiftJob
     unsigned char*      _imageData;
     popsift::ImageBase* _img;
     std::exception_ptr _err;
+    float               _gpu_time_ms;
 
 public:
 
@@ -87,6 +88,12 @@ public:
     void setFeatures( popsift::FeaturesBase* f );
 
     void setError(std::exception_ptr ptr);
+    
+    /** Set GPU processing time */
+    void setGpuTime(float gpu_time_ms);
+    
+    /** Get GPU processing time */
+    float getGpuTime() const;
 };
 
 /**

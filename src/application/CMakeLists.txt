@@ -38,6 +38,7 @@ else()
 endif()
 
 find_package(DevIL COMPONENTS IL ILU) # yields IL_FOUND, IL_LIBRARIES, IL_INCLUDE_DIR
+find_package(OpenCV QUIET) # yields OpenCV_FOUND, OpenCV_LIBS, OpenCV_INCLUDE_DIRS
 
 # for newer CMake versions and Boost 1.70 or newer must use Boost's make file
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.30)
@@ -54,13 +55,19 @@ endif(WIN32)
 set(PD_INCLUDE_DIRS    ${Boost_INCLUDE_DIRS})
 set(PD_LINK_LIBS       ${Boost_LIBRARIES} ${CUDA_CUDADEVRT_LIBRARY})
 
+# Image loading priority: DevIL > OpenCV > PGM
 if(IL_FOUND OR DevIL_FOUND)
-  message(STATUS "DevIL found")
+  message(STATUS "DevIL found - using DevIL for image loading")
   set(PD_COMPILE_OPTIONS "-DUSE_DEVIL")
   list(APPEND PD_INCLUDE_DIRS ${IL_INCLUDE_DIR})
   list(APPEND PD_LINK_LIBS    ${IL_LIBRARIES} ${ILU_LIBRARIES})
+elseif(OpenCV_FOUND)
+  message(STATUS "DevIL not found, but OpenCV found - using OpenCV for image loading")
+  set(PD_COMPILE_OPTIONS "-DUSE_OPENCV")
+  list(APPEND PD_INCLUDE_DIRS ${OpenCV_INCLUDE_DIRS})
+  list(APPEND PD_LINK_LIBS    ${OpenCV_LIBS})
 else()
-  message(WARNING "DevIL not found -- Falling back to pgmread")
+  message(WARNING "Neither DevIL nor OpenCV found -- Falling back to pgmread")
   set(PD_COMPILE_OPTIONS "" )
 endif()
 

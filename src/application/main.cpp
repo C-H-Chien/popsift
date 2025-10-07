@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -24,9 +25,13 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <chrono>
 
 #ifdef USE_DEVIL
 #include <devil_cpp_wrapper.hpp>
+#endif
+#ifdef USE_OPENCV
+#include <opencv2/opencv.hpp>
 #endif
 #include "pgmread.h"
 
@@ -163,7 +168,10 @@ SiftJob* process_image( const string& inputFile, PopSift& PopSift )
 {
     SiftJob* job;
     unsigned char* image_data;
+    int w = 0, h = 0;
+    bool image_loaded = false;
 
+    // Try DevIL first (if available and not forced to use pgmread)
 #ifdef USE_DEVIL
     if( ! pgmread_loading )
     {
@@ -174,70 +182,103 @@ SiftJob* process_image( const string& inputFile, PopSift& PopSift )
         }
 
         ilImage img;
-        if( img.Load( inputFile.c_str() ) == false ) {
-            cerr << "Could not load image " << inputFile << endl;
-            return 0;
+        if( img.Load( inputFile.c_str() ) == true ) {
+            if( img.Convert( IL_LUMINANCE ) == true ) {
+                w = img.Width();
+                h = img.Height();
+                cout << "Loading " << w << " x " << h << " image " << inputFile << " (DevIL)" << endl;
+                image_data = img.GetData();
+                image_loaded = true;
+                img.Clear();
+            } else {
+                cerr << "Failed converting image " << inputFile << " to unsigned greyscale image" << endl;
+            }
         }
-        if( img.Convert( IL_LUMINANCE ) == false ) {
-            cerr << "Failed converting image " << inputFile << " to unsigned greyscale image" << endl;
-            exit( -1 );
-        }
-        const auto w = img.Width();
-        const auto h = img.Height();
-        cout << "Loading " << w << " x " << h << " image " << inputFile << endl;
-
-        image_data = img.GetData();
-
-        job = PopSift.enqueue( w, h, image_data );
-
-        img.Clear();
     }
-    else
 #endif
+
+    // Try OpenCV if DevIL failed or is not available
+    if( ! image_loaded )
     {
-        int w{};
-        int h{};
+#ifdef USE_OPENCV
+        if( ! pgmread_loading )
+        {
+            cv::Mat img = cv::imread( inputFile, cv::IMREAD_GRAYSCALE );
+            if( ! img.empty() ) {
+                w = img.cols;
+                h = img.rows;
+                cout << "Loading " << w << " x " << h << " image " << inputFile << " (OpenCV)" << endl;
+                
+                // Allocate memory and copy data
+                image_data = new unsigned char[w * h];
+                memcpy( image_data, img.data, w * h );
+                image_loaded = true;
+            }
+        }
+#endif
+    }
+
+    // Fall back to PGM reader if both DevIL and OpenCV failed
+    if( ! image_loaded )
+    {
+        cout << "Loading " << inputFile << " (PGM fallback)" << endl;
         image_data = readPGMfile( inputFile, w, h );
         if( image_data == nullptr ) {
-            exit( EXIT_FAILURE );
+            cerr << "Could not load image " << inputFile << " with any available method" << endl;
+            return nullptr;
         }
+        image_loaded = true;
+    }
 
-        if( ! float_mode )
-        {
-            // PopSift.init( w, h );
-            job = PopSift.enqueue( w, h, image_data );
-
+    // Process the loaded image
+    if( ! float_mode )
+    {
+        job = PopSift.enqueue( w, h, image_data );
+        
+        // Clean up memory (only if we allocated it ourselves)
+#ifdef USE_OPENCV
+        if( ! pgmread_loading && image_loaded ) {
             delete [] image_data;
         }
-        else
+#endif
+    }
+    else
+    {
+        auto f_image_data = new float [w * h];
+        for( int i=0; i<w*h; i++ )
         {
-            auto f_image_data = new float [w * h];
-            for( int i=0; i<w*h; i++ )
-            {
-                f_image_data[i] = float( image_data[i] ) / 256.0f;
-            }
-            job = PopSift.enqueue( w, h, f_image_data );
-
-            delete [] image_data;
-            delete [] f_image_data;
+            f_image_data[i] = float( image_data[i] ) / 256.0f;
         }
+        job = PopSift.enqueue( w, h, f_image_data );
+
+        delete [] f_image_data;
+        
+        // Clean up memory (only if we allocated it ourselves)
+#ifdef USE_OPENCV
+        if( ! pgmread_loading && image_loaded ) {
+            delete [] image_data;
+        }
+#endif
     }
 
     return job;
 }
 
-void read_job( SiftJob* job, bool really_write )
+float read_job( SiftJob* job, bool really_write )
 {
     popsift::Features* feature_list = job->get();
-    cerr << "Number of feature points: " << feature_list->getFeatureCount()
-         << " number of feature descriptors: " << feature_list->getDescriptorCount()
-         << endl;
+    float gpu_time = job->getGpuTime();
+    
+    std::cout << "Number of feature points: " << feature_list->getFeatureCount() << std::endl 
+              << "Number of feature descriptors: " << feature_list->getDescriptorCount() << std::endl;
 
     if( really_write ) {
         std::ofstream of( "output-features.txt" );
         feature_list->print( of, write_as_uchar );
     }
     delete feature_list;
+    
+    return gpu_time;
 }
 
 int main(int argc, char **argv)
@@ -252,7 +293,6 @@ int main(int argc, char **argv)
 
     try {
         parseargs( argc, argv, config, inputFile ); // Parse command line
-        std::cout << inputFile << std::endl;
     }
     catch (std::exception& e) {
         std::cout << e.what() << std::endl;
@@ -290,13 +330,31 @@ int main(int argc, char **argv)
         jobs.push( job );
     }
 
+    // Process jobs and collect GPU timing
+    float total_gpu_time = 0.0f;
+    int processed_images = 0;
+    
     while( !jobs.empty() )
     {
         SiftJob* job = jobs.front();
         jobs.pop();
         if( job ) {
-            read_job( job, ! dont_write );
+            float gpu_time = read_job( job, ! dont_write );
+            total_gpu_time += gpu_time;
+            processed_images++;
             delete job;
+        }
+    }
+
+    // Print timing information if requested
+    if( print_time_info ) {
+        std::cout << "Total GPU SIFT processing time: " << std::fixed << std::setprecision(2) 
+                  << total_gpu_time << " ms" << std::endl;
+        
+        if( processed_images > 0 ) {
+            double avg_time_per_image = total_gpu_time / processed_images;
+            std::cout << "Average GPU time per image: " << std::fixed << std::setprecision(2) 
+                      << avg_time_per_image << " ms" << std::endl;
         }
     }
 
