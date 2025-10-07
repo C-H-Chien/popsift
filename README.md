@@ -29,6 +29,8 @@ Optionally, for the provided applications:
 
 * DevIL (libdevil-dev) can be used to load a broader range of image formats, otherwise only pgm is supported.
 
+* OpenCV can be used to read images in case DevIL is not supported (_e.g._, when running on a server with no root previlege to install DevIL)
+
 ## Build
 
 To build the library, you can run:
@@ -49,8 +51,20 @@ Some build options are available:
 ## Usage
 
 The main artifact created is `libpopsift`.
-If enabled, the test application `popsift-demo` is created as well.
+If enabled, the test application `popsift-demo` is created as well, _e.g._, in `build/Linux-x86_64/`.
 Calling `popsift-demo` without parameters shows the options.
+
+### Running a demo example
+Detect and extract SIFT features on `your-image.jpg` using
+```bash
+./popsift-demo -i your-image.jpg
+```
+with a `--print-time-info` flag, the timing in ms will be shown. By default, the SIFT features will be written in a `output-features.txt` file under the same location as `popsift-demo`. <br /><br />
+For SIFT feature matching, use the following command:
+```bash
+./popsift-match -l your-left-image.jpg -r your-right-image.jpg
+```
+The outcome will be written to a file `feature-matches.txt` with the corresponding data format.
 
 ### Using PopSift as third party
 
