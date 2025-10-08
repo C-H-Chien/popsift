@@ -99,6 +99,85 @@ target_compile_definitions(popsift-match PRIVATE ${Boost_DEFINITIONS})
 target_link_libraries(popsift-match PUBLIC PopSift::popsift ${PD_LINK_LIBS})
 
 #############################################################
+# Python bindings
+#############################################################
+
+if(PopSift_BUILD_PYTHON_BINDINGS)
+  # Find required packages for Python bindings
+  find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+  find_package(pybind11 REQUIRED)
+  
+  message(STATUS "Building Python bindings...")
+  message(STATUS "Python executable: ${Python3_EXECUTABLE}")
+  message(STATUS "Python version: ${Python3_VERSION}")
+  message(STATUS "pybind11 version: ${pybind11_VERSION}")
+  
+  # Create Python extension for feature extraction
+  pybind11_add_module(popsift_extract py_main.cpp pgmread.cpp)
+  
+  # Link libraries for feature extraction
+  target_link_libraries(popsift_extract PRIVATE 
+      PopSift::popsift
+      CUDA::cudart
+      CUDA::curand
+      ${PD_LINK_LIBS}
+  )
+  
+  # Set include directories for feature extraction
+  target_include_directories(popsift_extract PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/..
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../generated
+      ${Python3_INCLUDE_DIRS}
+      ${PD_INCLUDE_DIRS}
+  )
+  
+  # Set compile options and definitions
+  target_compile_options(popsift_extract PRIVATE ${PD_COMPILE_OPTIONS})
+  target_compile_definitions(popsift_extract PRIVATE ${Boost_DEFINITIONS})
+  
+  # Set C++ standard to match main project
+  set_target_properties(popsift_extract PROPERTIES
+      CXX_STANDARD ${PopSift_CXX_STANDARD}
+      CXX_STANDARD_REQUIRED ON
+  )
+  
+  # Create Python extension for feature matching
+  pybind11_add_module(popsift_match py_match.cpp pgmread.cpp)
+  
+  # Link libraries for feature matching
+  target_link_libraries(popsift_match PRIVATE 
+      PopSift::popsift
+      CUDA::cudart
+      CUDA::curand
+      ${PD_LINK_LIBS}
+  )
+  
+  # Set include directories for feature matching
+  target_include_directories(popsift_match PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/..
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../generated
+      ${Python3_INCLUDE_DIRS}
+      ${PD_INCLUDE_DIRS}
+  )
+  
+  # Set compile options and definitions
+  target_compile_options(popsift_match PRIVATE ${PD_COMPILE_OPTIONS})
+  target_compile_definitions(popsift_match PRIVATE ${Boost_DEFINITIONS})
+  
+  # Set C++ standard to match main project
+  set_target_properties(popsift_match PROPERTIES
+      CXX_STANDARD ${PopSift_CXX_STANDARD}
+      CXX_STANDARD_REQUIRED ON
+  )
+  
+  # Installation for Python modules
+  install(TARGETS popsift_extract popsift_match
+      COMPONENT python
+      LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/python
+  )
+endif()
+
+#############################################################
 # installation
 #############################################################
 

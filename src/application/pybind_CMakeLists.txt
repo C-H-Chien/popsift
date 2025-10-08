@@ -1,0 +1,72 @@
+# CMakeLists.txt for building PopSift Python bindings with pybind11
+
+# Find required packages
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+find_package(pybind11 REQUIRED)
+
+# Include directories
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../generated)
+
+# Link with the existing PopSift library
+# The popsift target should already be defined by the main CMakeLists.txt
+
+# Create Python extension for feature extraction
+pybind11_add_module(popsift_extract py_main.cpp)
+
+# Link libraries
+target_link_libraries(popsift_extract PRIVATE 
+    popsift
+    CUDA::cudart
+    CUDA::curand
+)
+
+# Set include directories for the extension
+target_include_directories(popsift_extract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../generated
+    ${Python3_INCLUDE_DIRS}
+)
+
+# Set C++ standard to match main project
+set_target_properties(popsift_extract PROPERTIES
+    CXX_STANDARD ${PopSift_CXX_STANDARD}
+    CXX_STANDARD_REQUIRED ON
+)
+
+# Create Python extension for feature matching
+pybind11_add_module(popsift_match py_match.cpp)
+
+# Link libraries
+target_link_libraries(popsift_match PRIVATE 
+    popsift
+    CUDA::cudart
+    CUDA::curand
+)
+
+# Set include directories for the extension
+target_include_directories(popsift_match PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../generated
+    ${Python3_INCLUDE_DIRS}
+)
+
+# Set C++ standard to match main project
+set_target_properties(popsift_match PROPERTIES
+    CXX_STANDARD ${PopSift_CXX_STANDARD}
+    CXX_STANDARD_REQUIRED ON
+)
+
+# Installation
+install(TARGETS popsift_extract popsift_match
+    COMPONENT python
+    LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/python
+)
+
+# Print information
+message(STATUS "Python executable: ${Python3_EXECUTABLE}")
+message(STATUS "Python version: ${Python3_VERSION}")
+message(STATUS "Python include dirs: ${Python3_INCLUDE_DIRS}")
+message(STATUS "Python libraries: ${Python3_LIBRARIES}")
+message(STATUS "pybind11 found: ${pybind11_FOUND}")
+message(STATUS "pybind11 version: ${pybind11_VERSION}")

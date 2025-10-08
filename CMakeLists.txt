@@ -28,6 +28,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_SYSTEM_NAME}-$
 
 option(PopSift_BUILD_EXAMPLES "Build PopSift applications."  ON)
 option(PopSift_BUILD_DOCS "Build PopSift documentation."  OFF)
+option(PopSift_BUILD_PYTHON_BINDINGS "Build PopSift Python bindings." OFF)
 option(PopSift_ERRCHK_AFTER_KERNEL     "Synchronize and check CUDA error after every kernel." OFF)
 option(PopSift_USE_POSITION_INDEPENDENT_CODE "Generate position independent code." ON)
 option(PopSift_USE_GRID_FILTER "Switch off grid filtering to massively reduce compile time while debugging other things." ON)
@@ -154,6 +155,11 @@ if(PopSift_BUILD_DOCS)
   add_subdirectory(doc)
 endif()
 
+if(PopSift_BUILD_PYTHON_BINDINGS)
+  # Python bindings will be added directly to src/application/CMakeLists.txt
+  message(STATUS "Python bindings enabled - will be built in application directory")
+endif()
+
 set(PopSift_TESTFILE_PATH "popsift-samples/datasets/sample/big_set/" CACHE STRING "Base directory where your test files are stored")
 if(PopSift_USE_TEST_CMD)
   if(NOT IS_ABSOLUTE("${PopSift_TESTFILE_PATH}"))
@@ -184,6 +190,7 @@ message(STATUS "Build type: " ${CMAKE_BUILD_TYPE})
 message(STATUS "Build Shared libs: " ${BUILD_SHARED_LIBS})
 message(STATUS "Build examples: " ${PopSift_BUILD_EXAMPLES})
 message(STATUS "Build documentation: " ${PopSift_BUILD_DOCS})
+message(STATUS "Build Python bindings: " ${PopSift_BUILD_PYTHON_BINDINGS})
 message(STATUS "Generate position independent code: " ${CMAKE_POSITION_INDEPENDENT_CODE})
 message(STATUS "Synchronize and check CUDA error after every kernel: " ${PopSift_ERRCHK_AFTER_KERNEL})
 message(STATUS "Grid filtering: " ${PopSift_USE_GRID_FILTER})
