@@ -38,6 +38,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include "sift_config_python.h"
 
 using namespace std;
 namespace py = pybind11;
@@ -246,12 +247,15 @@ struct MatchResult {
     std::vector<float> match_distances;
     float match_time_ms;
     int num_matches;
+    int num_total_matches;
 };
 
-MatchResult match_sift_features_from_files(const std::string& left_file,
-                                         const std::string& right_file,
-                                         bool verbose = false,
-                                         bool print_time_info = false) {
+
+MatchResult match_sift_features_from_files_with_config(const std::string& left_file,
+                                                      const std::string& right_file,
+                                                      const SiftConfig& sift_config,
+                                                      bool verbose = false,
+                                                      bool print_time_info = false) {
     // Initialize CUDA
     popsift::cuda::reset();
     
@@ -265,6 +269,9 @@ MatchResult match_sift_features_from_files(const std::string& left_file,
     if (verbose) {
         config.setVerbose();
     }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
     
     // Initialize PopSift for matching
     PopSift popSift(config, popsift::Config::MatchingMode);
@@ -296,11 +303,7 @@ MatchResult match_sift_features_from_files(const std::string& left_file,
     MatchResult result;
     result.match_time_ms = match_time_ms;
     
-    // Note: The current PopSift implementation doesn't provide direct access to match results
-    // The matching is performed internally and results are printed to stdout
-    // For now, we'll return empty match data with just the timing information
-    // TODO: Implement proper match result extraction if needed
-    
+   
     result.num_matches = 0; // Placeholder - actual matches are printed to stdout by the CUDA kernel
     
     if (print_time_info) {
@@ -316,10 +319,21 @@ MatchResult match_sift_features_from_files(const std::string& left_file,
     return result;
 }
 
-MatchResult match_sift_features_from_arrays(py::array_t<unsigned char> left_image,
-                                          py::array_t<unsigned char> right_image,
-                                          bool verbose = false,
-                                          bool print_time_info = false) {
+MatchResult match_sift_features_from_files(const std::string& left_file,
+    const std::string& right_file,
+    bool verbose = false,
+    bool print_time_info = false) 
+{
+    // Use default SiftConfig
+    SiftConfig default_config;
+    return match_sift_features_from_files_with_config(left_file, right_file, default_config, verbose, print_time_info);
+}
+
+MatchResult match_sift_features_from_arrays_with_config(py::array_t<unsigned char> left_image,
+                                                       py::array_t<unsigned char> right_image,
+                                                       const SiftConfig& sift_config,
+                                                       bool verbose = false,
+                                                       bool print_time_info = false) {
     // Initialize CUDA
     popsift::cuda::reset();
     
@@ -354,6 +368,9 @@ MatchResult match_sift_features_from_arrays(py::array_t<unsigned char> left_imag
         config.setVerbose();
     }
     
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
+    
     // Initialize PopSift for matching
     PopSift popSift(config, popsift::Config::MatchingMode);
     
@@ -372,20 +389,20 @@ MatchResult match_sift_features_from_arrays(py::array_t<unsigned char> left_imag
                   << ", Number of descriptors: " << rFeatures->getDescriptorCount() << std::endl;
     }
     
-    // Perform matching with CUDA timing
+    // Perform matching with CUDA timing and get results
     float match_time_ms = 0.0f;
-    lFeatures->match(rFeatures, &match_time_ms);
+    popsift::FeaturesDev::MatchInfo match_info = lFeatures->matchWithResults(rFeatures, &match_time_ms);
     
     // Get match results
     MatchResult result;
     result.match_time_ms = match_time_ms;
+    result.num_matches = match_info.num_accepted_matches;
+    result.num_total_matches = match_info.num_total_matches;
     
-    // Note: The current PopSift implementation doesn't provide direct access to match results
-    // The matching is performed internally and results are printed to stdout
-    // For now, we'll return empty match data with just the timing information
-    // TODO: Implement proper match result extraction if needed
-    
-    result.num_matches = 0; // Placeholder - actual matches are printed to stdout by the CUDA kernel
+    // Copy match data
+    result.matches_left_idx = match_info.left_feature_indices;
+    result.matches_right_idx = match_info.right_feature_indices;
+    result.match_distances = match_info.distances;
     
     if (print_time_info) {
         std::cout << "GPU SIFT matching time: " << std::fixed << std::setprecision(2) 
@@ -400,8 +417,20 @@ MatchResult match_sift_features_from_arrays(py::array_t<unsigned char> left_imag
     return result;
 }
 
+MatchResult match_sift_features_from_arrays(py::array_t<unsigned char> left_image,
+    py::array_t<unsigned char> right_image,
+    bool verbose = false,
+    bool print_time_info = false) 
+{
+    // Use default SiftConfig
+    SiftConfig default_config;
+    return match_sift_features_from_arrays_with_config(left_image, right_image, default_config, verbose, print_time_info);
+}
+
 PYBIND11_MODULE(popsift_match, m) {
     m.doc() = "PopSift SIFT feature matching Python bindings";
+    
+    // Note: SiftConfig is registered in popsift_config module to avoid duplication
     
     // Define MatchResult structure
     py::class_<MatchResult>(m, "MatchResult")
@@ -409,7 +438,8 @@ PYBIND11_MODULE(popsift_match, m) {
         .def_readonly("matches_right_idx", &MatchResult::matches_right_idx)
         .def_readonly("match_distances", &MatchResult::match_distances)
         .def_readonly("match_time_ms", &MatchResult::match_time_ms)
-        .def_readonly("num_matches", &MatchResult::num_matches);
+        .def_readonly("num_matches", &MatchResult::num_matches)
+        .def_readonly("num_total_matches", &MatchResult::num_total_matches);
     
     // Define functions
     m.def("match_features_from_files", &match_sift_features_from_files,
@@ -419,10 +449,26 @@ PYBIND11_MODULE(popsift_match, m) {
           py::arg("verbose") = false,
           py::arg("print_time_info") = false);
     
+    m.def("match_features_from_files_with_config", &match_sift_features_from_files_with_config,
+          "Match SIFT features from two image files with custom configuration",
+          py::arg("left_file"),
+          py::arg("right_file"),
+          py::arg("sift_config"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
     m.def("match_features_from_arrays", &match_sift_features_from_arrays,
           "Match SIFT features from two numpy arrays",
           py::arg("left_image"),
           py::arg("right_image"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("match_features_from_arrays_with_config", &match_sift_features_from_arrays_with_config,
+          "Match SIFT features from two numpy arrays with custom configuration",
+          py::arg("left_image"),
+          py::arg("right_image"),
+          py::arg("sift_config"),
           py::arg("verbose") = false,
           py::arg("print_time_info") = false);
     

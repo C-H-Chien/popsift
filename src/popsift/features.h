@@ -115,6 +115,16 @@ public:
     void reset( int num_ext, int num_ori );
 
     void match( FeaturesDev* other, float* match_time_ms = nullptr );
+    
+    //> struct to return match results
+    struct MatchInfo {
+        std::vector<int> left_feature_indices;
+        std::vector<int> right_feature_indices;
+        std::vector<float> distances;
+        int num_accepted_matches;
+        int num_total_matches;
+    };
+    MatchInfo matchWithResults( FeaturesDev* other, float* match_time_ms = nullptr );
 
     inline Feature*    getFeatures()    { return _ext; }
     inline Descriptor* getDescriptors() { return _ori; }

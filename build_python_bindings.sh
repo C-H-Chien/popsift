@@ -86,11 +86,12 @@ if [ "$METHOD" = "cmake" ]; then
     make -j$(nproc)
     
     # Check if modules were built (they're in Linux-x86_64 subdirectory)
-    if [ -d "Linux-x86_64" ] && ls Linux-x86_64/popsift_extract*.so 1> /dev/null 2>&1 && ls Linux-x86_64/popsift_match*.so 1> /dev/null 2>&1; then
+    if [ -d "Linux-x86_64" ] && ls Linux-x86_64/popsift_extract*.so 1> /dev/null 2>&1 && ls Linux-x86_64/popsift_match*.so 1> /dev/null 2>&1 && ls Linux-x86_64/popsift_config*.so 1> /dev/null 2>&1; then
         print_status "Python modules built successfully!"
         print_status "Modules location: $(pwd)/Linux-x86_64/"
         
         # Copy modules to parent directory for easy access
+        cp Linux-x86_64/popsift_config*.so ../
         cp Linux-x86_64/popsift_extract*.so ../
         cp Linux-x86_64/popsift_match*.so ../
         print_status "Modules copied to root directory"
@@ -100,7 +101,7 @@ if [ "$METHOD" = "cmake" ]; then
         ls -la Linux-x86_64/popsift_*.so
     else
         print_error "Failed to build Python modules"
-        print_error "Looking for popsift_extract*.so and popsift_match*.so in $(pwd)/Linux-x86_64/"
+        print_error "Looking for popsift_config*.so, popsift_extract*.so and popsift_match*.so in $(pwd)/Linux-x86_64/"
         print_error "Available files in Linux-x86_64/:"
         if [ -d "Linux-x86_64" ]; then
             ls -la Linux-x86_64/*.so 2>/dev/null || echo "No .so files found in Linux-x86_64/"
@@ -160,12 +161,13 @@ fi
 
 # Test import from the copied modules in parent directory
 cd ..
-if python3 -c "import popsift_extract, popsift_match; print('Modules imported successfully!')" 2>/dev/null; then
+    if python3 -c "import popsift_config, popsift_extract, popsift_match; print('Modules imported successfully!')" 2>/dev/null; then
     print_status "Python modules are working correctly!"
     
     # Show version info
     python3 -c "
-import popsift_extract, popsift_match
+import popsift_config, popsift_extract, popsift_match
+print('PopSift Config module: Available')
 print('PopSift Extract Version:', popsift_extract.get_version())
 print('PopSift Match Version:', popsift_match.get_version())
 "

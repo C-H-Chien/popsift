@@ -38,6 +38,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include "sift_config_python.h"
 
 using namespace std;
 namespace py = pybind11;
@@ -298,9 +299,11 @@ struct SiftResult {
     int num_descriptors;
 };
 
-SiftResult extract_sift_features_from_array(py::array_t<unsigned char> image_array, 
-                                           bool verbose = false,
-                                           bool print_time_info = false) {
+
+SiftResult extract_sift_features_from_array_with_config(py::array_t<unsigned char> image_array,
+                                                       const SiftConfig& sift_config,
+                                                       bool verbose = false,
+                                                       bool print_time_info = false) {
     // Initialize CUDA
     popsift::cuda::reset();
     
@@ -323,6 +326,9 @@ SiftResult extract_sift_features_from_array(py::array_t<unsigned char> image_arr
     if (verbose) {
         config.setVerbose();
     }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
     
     // Initialize PopSift
     PopSift popSift(config, popsift::Config::ExtractingMode, PopSift::ByteImages);
@@ -379,9 +385,19 @@ SiftResult extract_sift_features_from_array(py::array_t<unsigned char> image_arr
     return result;
 }
 
-SiftResult extract_sift_features_from_file(const std::string& filename,
-                                          bool verbose = false,
-                                          bool print_time_info = false) {
+SiftResult extract_sift_features_from_array(py::array_t<unsigned char> image_array, 
+    bool verbose = false,
+    bool print_time_info = false) 
+{
+    // Use default SiftConfig
+    SiftConfig default_config;
+    return extract_sift_features_from_array_with_config(image_array, default_config, verbose, print_time_info);
+}
+
+SiftResult extract_sift_features_from_file_with_config(const std::string& filename,
+                                                      const SiftConfig& sift_config,
+                                                      bool verbose = false,
+                                                      bool print_time_info = false) {
     // Initialize CUDA
     popsift::cuda::reset();
     
@@ -394,6 +410,9 @@ SiftResult extract_sift_features_from_file(const std::string& filename,
     if (verbose) {
         config.setVerbose();
     }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
     
     // Initialize PopSift
     PopSift popSift(config, popsift::Config::ExtractingMode, PopSift::ByteImages);
@@ -454,8 +473,19 @@ SiftResult extract_sift_features_from_file(const std::string& filename,
     return result;
 }
 
+SiftResult extract_sift_features_from_file(const std::string& filename,
+    bool verbose = false,
+    bool print_time_info = false) 
+{
+    // Use default SiftConfig
+    SiftConfig default_config;
+    return extract_sift_features_from_file_with_config(filename, default_config, verbose, print_time_info);
+}
+
 PYBIND11_MODULE(popsift_extract, m) {
     m.doc() = "PopSift SIFT feature extraction Python bindings";
+    
+    // Note: SiftConfig is registered in popsift_match module to avoid duplication
     
     // Define SiftResult structure
     py::class_<SiftResult>(m, "SiftResult")
@@ -475,9 +505,23 @@ PYBIND11_MODULE(popsift_extract, m) {
           py::arg("verbose") = false,
           py::arg("print_time_info") = false);
     
+    m.def("extract_features_from_array_with_config", &extract_sift_features_from_array_with_config,
+          "Extract SIFT features from numpy array with custom configuration",
+          py::arg("image_array"),
+          py::arg("sift_config"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
     m.def("extract_features_from_file", &extract_sift_features_from_file,
           "Extract SIFT features from image file",
           py::arg("filename"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("extract_features_from_file_with_config", &extract_sift_features_from_file_with_config,
+          "Extract SIFT features from image file with custom configuration",
+          py::arg("filename"),
+          py::arg("sift_config"),
           py::arg("verbose") = false,
           py::arg("print_time_info") = false);
     

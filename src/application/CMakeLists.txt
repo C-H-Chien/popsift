@@ -112,8 +112,35 @@ if(PopSift_BUILD_PYTHON_BINDINGS)
   message(STATUS "Python version: ${Python3_VERSION}")
   message(STATUS "pybind11 version: ${pybind11_VERSION}")
   
+  # Create Python extension for SIFT configuration (shared)
+  pybind11_add_module(popsift_config py_sift_config.cpp sift_config_python.cpp)
+  
+  # Link libraries for SIFT configuration
+  target_link_libraries(popsift_config PRIVATE 
+      PopSift::popsift
+      ${PD_LINK_LIBS}
+  )
+  
+  # Set include directories for SIFT configuration
+  target_include_directories(popsift_config PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/..
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../generated
+      ${Python3_INCLUDE_DIRS}
+      ${PD_INCLUDE_DIRS}
+  )
+  
+  # Set compile options and definitions
+  target_compile_options(popsift_config PRIVATE ${PD_COMPILE_OPTIONS})
+  target_compile_definitions(popsift_config PRIVATE ${Boost_DEFINITIONS})
+  
+  # Set C++ standard to match main project
+  set_target_properties(popsift_config PROPERTIES
+      CXX_STANDARD ${PopSift_CXX_STANDARD}
+      CXX_STANDARD_REQUIRED ON
+  )
+
   # Create Python extension for feature extraction
-  pybind11_add_module(popsift_extract py_main.cpp pgmread.cpp)
+  pybind11_add_module(popsift_extract py_main.cpp pgmread.cpp sift_config_python.cpp)
   
   # Link libraries for feature extraction
   target_link_libraries(popsift_extract PRIVATE 
@@ -142,7 +169,7 @@ if(PopSift_BUILD_PYTHON_BINDINGS)
   )
   
   # Create Python extension for feature matching
-  pybind11_add_module(popsift_match py_match.cpp pgmread.cpp)
+  pybind11_add_module(popsift_match py_match.cpp pgmread.cpp sift_config_python.cpp)
   
   # Link libraries for feature matching
   target_link_libraries(popsift_match PRIVATE 
@@ -171,7 +198,7 @@ if(PopSift_BUILD_PYTHON_BINDINGS)
   )
   
   # Installation for Python modules
-  install(TARGETS popsift_extract popsift_match
+  install(TARGETS popsift_config popsift_extract popsift_match
       COMPONENT python
       LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/python
   )

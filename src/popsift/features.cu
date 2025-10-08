@@ -236,7 +236,7 @@ compute_distance( int3* match_matrix, Descriptor* l, int l_len, Descriptor* r, i
 
     if( threadIdx.x == 0 )
     {
-        bool accept = ( match_1st_val / match_2nd_val < 0.8f );
+        bool accept = ( match_1st_val < 0.7f * match_2nd_val );
         match_matrix[blockIdx.x] = make_int3( match_1st_idx, match_2nd_idx, accept );
     }
 }
@@ -275,21 +275,21 @@ show_distance( int3*       match_matrix,
             match_results[i].accepted = match_matrix[i].z;
         }
 	    
-	    if( threadIdx.x == 0 )
-        {
-            if( match_matrix[i].z )
-                printf( "accept feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
-                        l_fem[i], i,
-                        r_fem[match_matrix[i].x], match_matrix[i].x,
-                        r_fem[match_matrix[i].y], match_matrix[i].y,
-                        d1, d2 );
-	    else
-                printf( "reject feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
-                        l_fem[i], i,
-                        r_fem[match_matrix[i].x], match_matrix[i].x,
-                        r_fem[match_matrix[i].y], match_matrix[i].y,
-                        d1, d2 );
-        }
+	    // if( threadIdx.x == 0 )
+        // {
+        //     if( match_matrix[i].z )
+        //         printf( "accept feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
+        //                 l_fem[i], i,
+        //                 r_fem[match_matrix[i].x], match_matrix[i].x,
+        //                 r_fem[match_matrix[i].y], match_matrix[i].y,
+        //                 d1, d2 );
+	    //     else
+        //         printf( "reject feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
+        //                 l_fem[i], i,
+        //                 r_fem[match_matrix[i].x], match_matrix[i].x,
+        //                 r_fem[match_matrix[i].y], match_matrix[i].y,
+        //                 d1, d2 );
+        // }
         __syncthreads();
     }
 }
@@ -325,20 +325,20 @@ void FeaturesDev::match( FeaturesDev* other, float* match_time_ms )
 
     POP_SYNC_CHK;
 
-    show_distance
-        <<<1,32>>>
-        ( match_matrix,
-          getFeatures(),
-          getDescriptors(),
-          getReverseMap(),
-          l_len,
-          other->getFeatures(),
-          other->getDescriptors(),
-          other->getReverseMap(),
-          r_len,
-          d_match_results );
+    // show_distance
+    //     <<<1,32>>>
+    //     ( match_matrix,
+    //       getFeatures(),
+    //       getDescriptors(),
+    //       getReverseMap(),
+    //       l_len,
+    //       other->getFeatures(),
+    //       other->getDescriptors(),
+    //       other->getReverseMap(),
+    //       r_len,
+    //       d_match_results );
 
-    POP_SYNC_CHK;
+    // POP_SYNC_CHK;
 
     // Record end time and calculate elapsed time
     cudaEventRecord(end_event);
@@ -440,6 +440,137 @@ std::ostream& operator<<( std::ostream& ostr, const Feature& feature )
 {
     feature.print( ostr, false );
     return ostr;
+}
+
+FeaturesDev::MatchInfo FeaturesDev::matchWithResults( FeaturesDev* other, float* match_time_ms )
+{
+    int l_len = getDescriptorCount( );
+    int r_len = other->getDescriptorCount( );
+
+    // Create CUDA events for timing
+    cudaEvent_t start_event, end_event;
+    cudaEventCreate(&start_event);
+    cudaEventCreate(&end_event);
+
+    int3* match_matrix = popsift::cuda::malloc_devT<int3>( l_len, __FILE__, __LINE__ );
+    MatchResult* d_match_results = popsift::cuda::malloc_devT<MatchResult>( l_len, __FILE__, __LINE__ );
+
+    dim3 grid;
+    grid.x = l_len;
+    grid.y = 1;
+    grid.z = 1;
+    dim3 block;
+    block.x = 32;
+    block.y = 1;
+    block.z = 1;
+
+    // Record start time
+    cudaEventRecord(start_event);
+
+    compute_distance
+        <<<grid,block>>>
+        ( match_matrix, getDescriptors(), l_len, other->getDescriptors(), r_len );
+
+    POP_SYNC_CHK;
+
+    show_distance
+        <<<1,32>>>
+        ( match_matrix,
+          getFeatures(),
+          getDescriptors(),
+          getReverseMap(),
+          l_len,
+          other->getFeatures(),
+          other->getDescriptors(),
+          other->getReverseMap(),
+          r_len,
+          d_match_results );
+
+    POP_SYNC_CHK;
+
+    // Record end time and calculate elapsed time
+    cudaEventRecord(end_event);
+    cudaEventSynchronize(end_event);
+    
+    float elapsed_time_ms = 0.0f;
+    cudaEventElapsedTime(&elapsed_time_ms, start_event, end_event);
+    
+    // Return timing if requested
+    if( match_time_ms != nullptr ) {
+        *match_time_ms = elapsed_time_ms;
+    }
+
+    // Copy the matching results back to host
+    MatchResult* h_match_results = new MatchResult[l_len];
+    cudaMemcpy( h_match_results, d_match_results, l_len * sizeof(MatchResult), cudaMemcpyDeviceToHost );
+    
+    //> Write matching results to file
+    std::ofstream match_file( "feature-matches.txt" );
+    if( match_file.is_open() ) {
+        match_file << "# Feature matching results\n";
+        match_file << "# Format: left_feature_idx left_descriptor_idx right_feature_idx right_descriptor_idx second_feature_idx second_descriptor_idx distance1 distance2 accepted\n";
+        match_file << "# accepted: 1 = match accepted, 0 = match rejected\n";
+        
+        int accepted_count = 0;
+        int rejected_count = 0;
+        
+        for( int i = 0; i < l_len; i++ ) {
+            match_file << h_match_results[i].left_feature_idx << " "
+                      << h_match_results[i].left_descriptor_idx << " "
+                      << h_match_results[i].right_feature_idx << " "
+                      << h_match_results[i].right_descriptor_idx << " "
+                      << h_match_results[i].second_feature_idx << " "
+                      << h_match_results[i].second_descriptor_idx << " "
+                      << std::fixed << std::setprecision(3) 
+                      << h_match_results[i].distance1 << " "
+                      << h_match_results[i].distance2 << " "
+                      << (h_match_results[i].accepted ? 1 : 0) << "\n";
+            
+            if( h_match_results[i].accepted ) {
+                accepted_count++;
+            } else {
+                rejected_count++;
+            }
+        }
+        
+        match_file << "\n# Summary:\n";
+        match_file << "# Total matches: " << l_len << "\n";
+        match_file << "# Accepted matches: " << accepted_count << "\n";
+        match_file << "# Rejected matches: " << rejected_count << "\n";
+        match_file << "# Acceptance rate: " << std::fixed << std::setprecision(2) 
+                   << (100.0 * accepted_count / l_len) << "%\n";
+        
+        match_file.close();
+        std::cout << "Feature matching results written to feature-matches.txt" << std::endl;
+        std::cout << "Accepted matches: " << accepted_count << " / " << l_len 
+                  << " (" << std::fixed << std::setprecision(2) 
+                  << (100.0 * accepted_count / l_len) << "%)" << std::endl;
+    } else {
+        std::cerr << "Warning: Could not open feature-matches.txt for writing" << std::endl;
+    }
+    
+    // Extract accepted matches
+    MatchInfo match_info;
+    match_info.num_total_matches = l_len;
+    match_info.num_accepted_matches = 0;
+    
+    for( int i = 0; i < l_len; i++ ) {
+        if( h_match_results[i].accepted ) {
+            match_info.left_feature_indices.push_back(h_match_results[i].left_feature_idx);
+            match_info.right_feature_indices.push_back(h_match_results[i].right_feature_idx);
+            match_info.distances.push_back(h_match_results[i].distance1);
+            match_info.num_accepted_matches++;
+        }
+    }
+    
+    // Cleanup
+    delete[] h_match_results;
+    POP_CUDA_FREE(match_matrix);
+    POP_CUDA_FREE(d_match_results);
+    cudaEventDestroy(start_event);
+    cudaEventDestroy(end_event);
+    
+    return match_info;
 }
 
 } // namespace popsift
