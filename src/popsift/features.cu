@@ -325,20 +325,20 @@ void FeaturesDev::match( FeaturesDev* other, float* match_time_ms )
 
     POP_SYNC_CHK;
 
-    // show_distance
-    //     <<<1,32>>>
-    //     ( match_matrix,
-    //       getFeatures(),
-    //       getDescriptors(),
-    //       getReverseMap(),
-    //       l_len,
-    //       other->getFeatures(),
-    //       other->getDescriptors(),
-    //       other->getReverseMap(),
-    //       r_len,
-    //       d_match_results );
+    show_distance
+        <<<1,32>>>
+        ( match_matrix,
+          getFeatures(),
+          getDescriptors(),
+          getReverseMap(),
+          l_len,
+          other->getFeatures(),
+          other->getDescriptors(),
+          other->getReverseMap(),
+          r_len,
+          d_match_results );
 
-    // POP_SYNC_CHK;
+    POP_SYNC_CHK;
 
     // Record end time and calculate elapsed time
     cudaEventRecord(end_event);
