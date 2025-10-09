@@ -275,21 +275,21 @@ show_distance( int3*       match_matrix,
             match_results[i].accepted = match_matrix[i].z;
         }
 	    
-	    if( threadIdx.x == 0 )
-        {
-            if( match_matrix[i].z )
-                printf( "accept feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
-                        l_fem[i], i,
-                        r_fem[match_matrix[i].x], match_matrix[i].x,
-                        r_fem[match_matrix[i].y], match_matrix[i].y,
-                        d1, d2 );
-	    else
-                printf( "reject feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
-                        l_fem[i], i,
-                        r_fem[match_matrix[i].x], match_matrix[i].x,
-                        r_fem[match_matrix[i].y], match_matrix[i].y,
-                        d1, d2 );
-        }
+	    // if( threadIdx.x == 0 )
+        // {
+        //     if( match_matrix[i].z )
+        //         printf( "accept feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
+        //                 l_fem[i], i,
+        //                 r_fem[match_matrix[i].x], match_matrix[i].x,
+        //                 r_fem[match_matrix[i].y], match_matrix[i].y,
+        //                 d1, d2 );
+	    // else
+        //         printf( "reject feat %4d [%4d] matches feat %4d [%4d] ( 2nd feat %4d [%4d] ) dist %.3f vs %.3f\n",
+        //                 l_fem[i], i,
+        //                 r_fem[match_matrix[i].x], match_matrix[i].x,
+        //                 r_fem[match_matrix[i].y], match_matrix[i].y,
+        //                 d1, d2 );
+        // }
         __syncthreads();
     }
 }

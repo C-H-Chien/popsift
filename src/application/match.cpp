@@ -279,10 +279,23 @@ int main(int argc, char **argv)
     popsift::FeaturesDev* lFeatures = lJob->getDev();
     popsift::FeaturesDev* rFeatures = rJob->getDev();
     
-    cout << "Number of features:    " << lFeatures->getFeatureCount() << endl;
-    cout << "Number of descriptors: " << lFeatures->getDescriptorCount() << endl;
-    cout << "Number of features:    " << rFeatures->getFeatureCount() << endl;
-    cout << "Number of descriptors: " << rFeatures->getDescriptorCount() << endl;
+    // Retrieve GPU computation times
+    float lGpuTime = lJob->getGpuTime();
+    float rGpuTime = rJob->getGpuTime();
+    
+    cout << "Left image:" << endl;
+    cout << " - Number of features:    " << lFeatures->getFeatureCount() << endl;
+    cout << " - Number of descriptors: " << lFeatures->getDescriptorCount() << endl;
+    if( print_time_info ) {
+        cout << " - GPU SIFT computation:  " << fixed << setprecision(2) << lGpuTime << " ms" << endl;
+    }
+    
+    cout << "Right image:" << endl;
+    cout << " - Number of features:    " << rFeatures->getFeatureCount() << endl;
+    cout << " - Number of descriptors: " << rFeatures->getDescriptorCount() << endl;
+    if( print_time_info ) {
+        cout << " - GPU SIFT computation:  " << fixed << setprecision(2) << rGpuTime << " ms" << endl;
+    }
 
     // Perform matching with CUDA timing
     float match_time_ms = 0.0f;
