@@ -383,6 +383,14 @@ void PopSift::matchPrepareLoop( )
 
             private_init(img->getWidth(), img->getHeight());
 
+            // Create CUDA events for timing
+            cudaEvent_t start_event, end_event;
+            cudaEventCreate(&start_event);
+            cudaEventCreate(&end_event);
+
+            // Record start time
+            cudaEventRecord(start_event);
+
             p._pyramid->step1(_config, img);
             p._unused.push(img); // uploaded input image no longer needed, release for reuse
 
@@ -390,6 +398,20 @@ void PopSift::matchPrepareLoop( )
 
             features = p._pyramid->clone_device_descriptors(_config);
             cudaDeviceSynchronize();
+
+            // Record end time and calculate elapsed time
+            cudaEventRecord(end_event);
+            cudaEventSynchronize(end_event);
+            
+            float elapsed_time_ms = 0.0f;
+            cudaEventElapsedTime(&elapsed_time_ms, start_event, end_event);
+            
+            // Store timing in the job
+            job->setGpuTime(elapsed_time_ms);
+            
+            // Clean up CUDA events
+            cudaEventDestroy(start_event);
+            cudaEventDestroy(end_event);
         }
         catch(const std::exception& e)
         {

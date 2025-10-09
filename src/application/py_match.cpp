@@ -246,6 +246,8 @@ struct MatchResult {
     std::vector<int> matches_right_idx;
     std::vector<float> match_distances;
     float match_time_ms;
+    float left_gpu_time_ms;
+    float right_gpu_time_ms;
     int num_matches;
     int num_total_matches;
 };
@@ -288,11 +290,23 @@ MatchResult match_sift_features_from_files_with_config(const std::string& left_f
     popsift::FeaturesDev* lFeatures = lJob->getDev();
     popsift::FeaturesDev* rFeatures = rJob->getDev();
     
+    // Get GPU extraction times
+    float left_gpu_time = lJob->getGpuTime();
+    float right_gpu_time = rJob->getGpuTime();
+    
     if (verbose) {
         std::cout << "Left image - Number of features: " << lFeatures->getFeatureCount() 
                   << ", Number of descriptors: " << lFeatures->getDescriptorCount() << std::endl;
+        if (print_time_info) {
+            std::cout << "Left image - GPU extraction time: " << std::fixed << std::setprecision(2) 
+                      << left_gpu_time << " ms" << std::endl;
+        }
         std::cout << "Right image - Number of features: " << rFeatures->getFeatureCount() 
                   << ", Number of descriptors: " << rFeatures->getDescriptorCount() << std::endl;
+        if (print_time_info) {
+            std::cout << "Right image - GPU extraction time: " << std::fixed << std::setprecision(2) 
+                      << right_gpu_time << " ms" << std::endl;
+        }
     }
     
     // Perform matching with CUDA timing
@@ -302,6 +316,8 @@ MatchResult match_sift_features_from_files_with_config(const std::string& left_f
     // Get match results
     MatchResult result;
     result.match_time_ms = match_time_ms;
+    result.left_gpu_time_ms = left_gpu_time;
+    result.right_gpu_time_ms = right_gpu_time;
     
    
     result.num_matches = 0; // Placeholder - actual matches are printed to stdout by the CUDA kernel
@@ -382,11 +398,23 @@ MatchResult match_sift_features_from_arrays_with_config(py::array_t<unsigned cha
     popsift::FeaturesDev* lFeatures = lJob->getDev();
     popsift::FeaturesDev* rFeatures = rJob->getDev();
     
+    // Get GPU extraction times
+    float left_gpu_time = lJob->getGpuTime();
+    float right_gpu_time = rJob->getGpuTime();
+    
     if (verbose) {
         std::cout << "Left image - Number of features: " << lFeatures->getFeatureCount() 
                   << ", Number of descriptors: " << lFeatures->getDescriptorCount() << std::endl;
+        if (print_time_info) {
+            std::cout << "Left image - GPU extraction time: " << std::fixed << std::setprecision(2) 
+                      << left_gpu_time << " ms" << std::endl;
+        }
         std::cout << "Right image - Number of features: " << rFeatures->getFeatureCount() 
                   << ", Number of descriptors: " << rFeatures->getDescriptorCount() << std::endl;
+        if (print_time_info) {
+            std::cout << "Right image - GPU extraction time: " << std::fixed << std::setprecision(2) 
+                      << right_gpu_time << " ms" << std::endl;
+        }
     }
     
     // Perform matching with CUDA timing and get results
@@ -396,6 +424,8 @@ MatchResult match_sift_features_from_arrays_with_config(py::array_t<unsigned cha
     // Get match results
     MatchResult result;
     result.match_time_ms = match_time_ms;
+    result.left_gpu_time_ms = left_gpu_time;
+    result.right_gpu_time_ms = right_gpu_time;
     result.num_matches = match_info.num_accepted_matches;
     result.num_total_matches = match_info.num_total_matches;
     
@@ -438,6 +468,8 @@ PYBIND11_MODULE(popsift_match, m) {
         .def_readonly("matches_right_idx", &MatchResult::matches_right_idx)
         .def_readonly("match_distances", &MatchResult::match_distances)
         .def_readonly("match_time_ms", &MatchResult::match_time_ms)
+        .def_readonly("left_gpu_time_ms", &MatchResult::left_gpu_time_ms)
+        .def_readonly("right_gpu_time_ms", &MatchResult::right_gpu_time_ms)
         .def_readonly("num_matches", &MatchResult::num_matches)
         .def_readonly("num_total_matches", &MatchResult::num_total_matches);
     
