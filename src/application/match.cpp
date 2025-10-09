@@ -312,6 +312,12 @@ int main(int argc, char **argv)
 
     PopSift.uninit( );
 
+
+    if( print_time_info ) {
+        float total_gpu_time = lGpuTime + rGpuTime + match_time_ms;
+        std::cout << "Total GPU SIFT processing time on matching two images: " << std::fixed << std::setprecision(2) 
+                  << total_gpu_time << " ms" << std::endl;
+    }
     return EXIT_SUCCESS;
 }
 
