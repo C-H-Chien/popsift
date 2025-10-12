@@ -482,6 +482,289 @@ SiftResult extract_sift_features_from_file(const std::string& filename,
     return extract_sift_features_from_file_with_config(filename, default_config, verbose, print_time_info);
 }
 
+// Batch extraction for multiple images
+std::vector<SiftResult> extract_multiple_from_arrays_with_config(
+    const std::vector<py::array_t<unsigned char>>& images,
+    const SiftConfig& sift_config,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    if (images.empty()) {
+        throw std::runtime_error("No images provided");
+    }
+    
+    size_t num_images = images.size();
+    
+    // Initialize CUDA
+    popsift::cuda::reset();
+    
+    if (verbose) {
+        std::cout << "Batch extracting features from " << num_images << " images" << std::endl;
+    }
+    
+    // Create configuration
+    popsift::Config config;
+    if (verbose) {
+        config.setVerbose();
+    }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
+    
+    // Initialize PopSift for extraction (reuse for all images)
+    PopSift popSift(config, popsift::Config::ExtractingMode, PopSift::ByteImages);
+    
+    // Storage for jobs
+    std::vector<SiftJob*> jobs;
+    
+    // Enqueue all images
+    if (verbose) {
+        std::cout << "Enqueuing all images..." << std::endl;
+    }
+    
+    for (size_t i = 0; i < num_images; i++) {
+        // Get image dimensions and data
+        py::buffer_info buf = images[i].request();
+        
+        if (buf.ndim != 2) {
+            throw std::runtime_error("All image arrays must be 2D (grayscale)");
+        }
+        
+        int h = buf.shape[0];
+        int w = buf.shape[1];
+        unsigned char* data = static_cast<unsigned char*>(buf.ptr);
+        
+        if (verbose) {
+            std::cout << "Image " << i << ": " << w << "x" << h << std::endl;
+        }
+        
+        // Enqueue image (pipeline will process it)
+        SiftJob* job = popSift.enqueue(w, h, data);
+        jobs.push_back(job);
+    }
+    
+    if (verbose) {
+        std::cout << "All images enqueued. Processing..." << std::endl;
+    }
+    
+    // Process results for each image
+    std::vector<SiftResult> results;
+    results.reserve(num_images);
+    
+    for (size_t i = 0; i < num_images; i++) {
+        if (verbose) {
+            std::cout << "Processing image " << i << "..." << std::endl;
+        }
+        
+        // Get results (this blocks until processing is complete)
+        popsift::Features* features = jobs[i]->get();
+        float gpu_time = jobs[i]->getGpuTime();
+        
+        // Extract keypoints and descriptors
+        SiftResult result;
+        result.gpu_time_ms = gpu_time;
+        result.num_features = features->getFeatureCount();
+        result.num_descriptors = features->getDescriptorCount();
+        
+        if (verbose) {
+            std::cout << "Image " << i << " - Features: " << result.num_features 
+                      << ", Descriptors: " << result.num_descriptors << std::endl;
+            if (print_time_info) {
+                std::cout << "Image " << i << " - GPU time: " << std::fixed 
+                          << std::setprecision(2) << gpu_time << " ms" << std::endl;
+            }
+        }
+        
+        // Extract keypoint data
+        const popsift::Feature* feature_data = features->getFeatures();
+        const popsift::Descriptor* desc_data = features->getDescriptors();
+        
+        for (int j = 0; j < result.num_features; ++j) {
+            result.keypoints_x.push_back(feature_data[j].xpos);
+            result.keypoints_y.push_back(feature_data[j].ypos);
+            result.keypoints_scale.push_back(feature_data[j].sigma);
+            // Use the first orientation if available
+            if (feature_data[j].num_ori > 0) {
+                result.keypoints_orientation.push_back(feature_data[j].orientation[0]);
+            } else {
+                result.keypoints_orientation.push_back(0.0f);
+            }
+        }
+        
+        // Extract descriptors (128-dimensional)
+        int desc_size = 128;
+        for (int j = 0; j < result.num_descriptors; ++j) {
+            std::vector<float> descriptor;
+            for (int k = 0; k < desc_size; ++k) {
+                descriptor.push_back(desc_data[j].features[k]);
+            }
+            result.descriptors.push_back(descriptor);
+        }
+        
+        results.push_back(result);
+        
+        // Cleanup features for this image
+        delete features;
+        delete jobs[i];
+    }
+    
+    // Cleanup PopSift
+    popSift.uninit();
+    
+    if (verbose) {
+        std::cout << "Batch extraction complete. Processed " << num_images << " images." << std::endl;
+    }
+    
+    return results;
+}
+
+std::vector<SiftResult> extract_multiple_from_arrays(
+    const std::vector<py::array_t<unsigned char>>& images,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    SiftConfig default_config;
+    return extract_multiple_from_arrays_with_config(images, default_config, verbose, print_time_info);
+}
+
+std::vector<SiftResult> extract_multiple_from_files_with_config(
+    const std::vector<std::string>& filenames,
+    const SiftConfig& sift_config,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    if (filenames.empty()) {
+        throw std::runtime_error("No files provided");
+    }
+    
+    size_t num_files = filenames.size();
+    
+    // Initialize CUDA
+    popsift::cuda::reset();
+    
+    if (verbose) {
+        std::cout << "Batch extracting features from " << num_files << " files" << std::endl;
+    }
+    
+    // Create configuration
+    popsift::Config config;
+    if (verbose) {
+        config.setVerbose();
+    }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
+    
+    // Initialize PopSift for extraction (reuse for all images)
+    PopSift popSift(config, popsift::Config::ExtractingMode, PopSift::ByteImages);
+    
+    // Storage for jobs
+    std::vector<SiftJob*> jobs;
+    
+    // Enqueue all images
+    if (verbose) {
+        std::cout << "Loading and enqueuing all images..." << std::endl;
+    }
+    
+    for (size_t i = 0; i < num_files; i++) {
+        if (verbose) {
+            std::cout << "Image " << i << ": " << filenames[i] << std::endl;
+        }
+        
+        // Process image using existing function
+        SiftJob* job = process_image(filenames[i], popSift);
+        
+        if (!job) {
+            throw std::runtime_error("Failed to process image " + std::to_string(i) + ": " + filenames[i]);
+        }
+        
+        jobs.push_back(job);
+    }
+    
+    if (verbose) {
+        std::cout << "All images enqueued. Processing..." << std::endl;
+    }
+    
+    // Process results for each image
+    std::vector<SiftResult> results;
+    results.reserve(num_files);
+    
+    for (size_t i = 0; i < num_files; i++) {
+        if (verbose) {
+            std::cout << "Processing image " << i << "..." << std::endl;
+        }
+        
+        // Get results (this blocks until processing is complete)
+        popsift::Features* features = jobs[i]->get();
+        float gpu_time = jobs[i]->getGpuTime();
+        
+        // Extract keypoints and descriptors
+        SiftResult result;
+        result.gpu_time_ms = gpu_time;
+        result.num_features = features->getFeatureCount();
+        result.num_descriptors = features->getDescriptorCount();
+        
+        if (verbose) {
+            std::cout << "Image " << i << " - Features: " << result.num_features 
+                      << ", Descriptors: " << result.num_descriptors << std::endl;
+            if (print_time_info) {
+                std::cout << "Image " << i << " - GPU time: " << std::fixed 
+                          << std::setprecision(2) << gpu_time << " ms" << std::endl;
+            }
+        }
+        
+        // Extract keypoint data
+        const popsift::Feature* feature_data = features->getFeatures();
+        const popsift::Descriptor* desc_data = features->getDescriptors();
+        
+        for (int j = 0; j < result.num_features; ++j) {
+            result.keypoints_x.push_back(feature_data[j].xpos);
+            result.keypoints_y.push_back(feature_data[j].ypos);
+            result.keypoints_scale.push_back(feature_data[j].sigma);
+            // Use the first orientation if available
+            if (feature_data[j].num_ori > 0) {
+                result.keypoints_orientation.push_back(feature_data[j].orientation[0]);
+            } else {
+                result.keypoints_orientation.push_back(0.0f);
+            }
+        }
+        
+        // Extract descriptors (128-dimensional)
+        int desc_size = 128;
+        for (int j = 0; j < result.num_descriptors; ++j) {
+            std::vector<float> descriptor;
+            for (int k = 0; k < desc_size; ++k) {
+                descriptor.push_back(desc_data[j].features[k]);
+            }
+            result.descriptors.push_back(descriptor);
+        }
+        
+        results.push_back(result);
+        
+        // Cleanup features for this image
+        delete features;
+        delete jobs[i];
+    }
+    
+    // Cleanup PopSift
+    popSift.uninit();
+    
+    if (verbose) {
+        std::cout << "Batch extraction complete. Processed " << num_files << " images." << std::endl;
+    }
+    
+    return results;
+}
+
+std::vector<SiftResult> extract_multiple_from_files(
+    const std::vector<std::string>& filenames,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    SiftConfig default_config;
+    return extract_multiple_from_files_with_config(filenames, default_config, verbose, print_time_info);
+}
+
 PYBIND11_MODULE(popsift_extract, m) {
     m.doc() = "PopSift SIFT feature extraction Python bindings";
     
@@ -521,6 +804,33 @@ PYBIND11_MODULE(popsift_extract, m) {
     m.def("extract_features_from_file_with_config", &extract_sift_features_from_file_with_config,
           "Extract SIFT features from image file with custom configuration",
           py::arg("filename"),
+          py::arg("sift_config"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    // Batch extraction functions
+    m.def("extract_multiple_from_arrays", &extract_multiple_from_arrays,
+          "Batch extract SIFT features from multiple numpy arrays",
+          py::arg("images"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("extract_multiple_from_arrays_with_config", &extract_multiple_from_arrays_with_config,
+          "Batch extract SIFT features from multiple numpy arrays with custom configuration",
+          py::arg("images"),
+          py::arg("sift_config"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("extract_multiple_from_files", &extract_multiple_from_files,
+          "Batch extract SIFT features from multiple image files",
+          py::arg("filenames"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("extract_multiple_from_files_with_config", &extract_multiple_from_files_with_config,
+          "Batch extract SIFT features from multiple image files with custom configuration",
+          py::arg("filenames"),
           py::arg("sift_config"),
           py::arg("verbose") = false,
           py::arg("print_time_info") = false);
