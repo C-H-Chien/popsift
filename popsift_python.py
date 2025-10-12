@@ -67,7 +67,7 @@ class PopSiftProcessor:
             raise ValueError(f"Could not load image: {image_path}")
         
         if self.verbose:
-            print(f"Loaded image: {img.shape[1]} x {img.shape[0]} pixels")
+            print(f"Loaded image: {img.shape[0]} x {img.shape[1]} pixels")
         
         return img
     
@@ -482,7 +482,13 @@ def main():
 
     #> some customized sift config
     # rootsift_config = create_sift_config(root_sift="true", norm_mode="RootSift")
-    custom_config = create_sift_config(threshold=0.04, octaves=4, levels=3, vlfeat_mode="true")
+    custom_config = create_sift_config(
+        threshold=0.04, 
+        octaves=4, 
+        levels=3, 
+        vlfeat_mode="true",
+        filter_sort="up"  # Use deterministic sorting instead of random!
+    )
     
     if not POPSIFT_AVAILABLE:
         print("Error: PopSift modules are not available.")
@@ -511,7 +517,7 @@ def main():
     
     elif args.command == 'match':
         try:
-            matches = processor.match_features_from_files(args.left, args.right, print_timing=args.timing)
+            matches = processor.match_features_from_files(args.left, args.right, print_timing=args.timing, sift_config=custom_config)
             
             if args.output:
                 with open(args.output, 'w') as f:
@@ -537,7 +543,7 @@ def main():
                 plt.show()
             
             acceptance_rate = (matches.num_matches / matches.num_total_matches * 100) if matches.num_total_matches > 0 else 0
-            print(f"Successfully found {matches.num_matches} accepted matches out of {matches.num_total_matches} total ({acceptance_rate:.1f}% acceptance rate) between {args.left} and {args.right}")
+            print(f"Successfully found {matches.num_matches} accepted matches out of {matches.num_total_matches} total ({acceptance_rate:.1f}% acceptance rate)")
             
         except Exception as e:
             print(f"Error: {e}")

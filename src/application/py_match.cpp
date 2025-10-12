@@ -174,42 +174,47 @@ SiftJob* process_image( const string& inputFile, PopSift& PopSift )
     int w = 0, h = 0;
     bool image_loaded = false;
 
-    // Try DevIL first (if available and not forced to use pgmread)
-#ifdef USE_DEVIL
+    // Try OpenCV first (for consistency with Python array-based loading)
+    // OpenCV and DevIL convert to grayscale differently, causing feature differences!
+#ifdef USE_OPENCV
     if( ! pgmread_loading )
     {
-        ilImage img;
-        if( img.Load( inputFile.c_str() ) == true ) {
-            if( img.Convert( IL_LUMINANCE ) == true ) {
-                w = img.Width();
-                h = img.Height();
-                cout << "Loading " << w << " x " << h << " image " << inputFile << " (DevIL)" << endl;
-                image_data = img.GetData();
-                image_loaded = true;
-                img.Clear();
-            } else {
-                cerr << "Failed converting image " << inputFile << " to unsigned greyscale image" << endl;
-            }
+        cv::Mat img = cv::imread( inputFile, cv::IMREAD_GRAYSCALE );
+        if( ! img.empty() ) {
+            w = img.cols;
+            h = img.rows;
+            cout << "Loading " << w << " x " << h << " image " << inputFile << " (OpenCV)" << endl;
+            
+            // Allocate memory and copy data
+            image_data = new unsigned char[w * h];
+            memcpy( image_data, img.data, w * h );
+            image_loaded = true;
         }
     }
 #endif
 
-    // Try OpenCV if DevIL failed or is not available
+    // Try DevIL as fallback (if OpenCV failed or is not available)
     if( ! image_loaded )
     {
-#ifdef USE_OPENCV
+#ifdef USE_DEVIL
         if( ! pgmread_loading )
         {
-            cv::Mat img = cv::imread( inputFile, cv::IMREAD_GRAYSCALE );
-            if( ! img.empty() ) {
-                w = img.cols;
-                h = img.rows;
-                cout << "Loading " << w << " x " << h << " image " << inputFile << " (OpenCV)" << endl;
-                
-                // Allocate memory and copy data
-                image_data = new unsigned char[w * h];
-                memcpy( image_data, img.data, w * h );
-                image_loaded = true;
+            ilImage img;
+            if( img.Load( inputFile.c_str() ) == true ) {
+                if( img.Convert( IL_LUMINANCE ) == true ) {
+                    w = img.Width();
+                    h = img.Height();
+                    cout << "Loading " << w << " x " << h << " image " << inputFile << " (DevIL fallback)" << endl;
+                    
+                    // Allocate memory and copy data (don't use internal pointer)
+                    image_data = new unsigned char[w * h];
+                    memcpy( image_data, img.GetData(), w * h );
+                    image_loaded = true;
+                    // Now safe to clear the DevIL image
+                    img.Clear();
+                } else {
+                    cerr << "Failed converting image " << inputFile << " to unsigned greyscale image" << endl;
+                }
             }
         }
 #endif
@@ -230,8 +235,8 @@ SiftJob* process_image( const string& inputFile, PopSift& PopSift )
     // Process the loaded image
     job = PopSift.enqueue( w, h, image_data );
     
-    // Clean up memory (only if we allocated it ourselves)
-#ifdef USE_OPENCV
+    // Clean up memory (we always allocate our own copy now for DevIL and OpenCV)
+#if defined(USE_DEVIL) || defined(USE_OPENCV)
     if( ! pgmread_loading && image_loaded ) {
         delete [] image_data;
     }
@@ -309,18 +314,22 @@ MatchResult match_sift_features_from_files_with_config(const std::string& left_f
         }
     }
     
-    // Perform matching with CUDA timing
+    // Perform matching with CUDA timing and get results
     float match_time_ms = 0.0f;
-    lFeatures->match(rFeatures, &match_time_ms);
+    popsift::FeaturesDev::MatchInfo match_info = lFeatures->matchWithResults(rFeatures, &match_time_ms);
     
     // Get match results
     MatchResult result;
     result.match_time_ms = match_time_ms;
     result.left_gpu_time_ms = left_gpu_time;
     result.right_gpu_time_ms = right_gpu_time;
+    result.num_matches = match_info.num_accepted_matches;
+    result.num_total_matches = match_info.num_total_matches;
     
-   
-    result.num_matches = 0; // Placeholder - actual matches are printed to stdout by the CUDA kernel
+    // Copy match data
+    result.matches_left_idx = match_info.left_feature_indices;
+    result.matches_right_idx = match_info.right_feature_indices;
+    result.match_distances = match_info.distances;
     
     if (print_time_info) {
         std::cout << "GPU SIFT matching time: " << std::fixed << std::setprecision(2) 
@@ -457,6 +466,314 @@ MatchResult match_sift_features_from_arrays(py::array_t<unsigned char> left_imag
     return match_sift_features_from_arrays_with_config(left_image, right_image, default_config, verbose, print_time_info);
 }
 
+// Batch processing for multiple image pairs
+std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
+    const std::vector<py::array_t<unsigned char>>& left_images,
+    const std::vector<py::array_t<unsigned char>>& right_images,
+    const SiftConfig& sift_config,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    if (left_images.size() != right_images.size()) {
+        throw std::runtime_error("Number of left and right images must match");
+    }
+    
+    if (left_images.empty()) {
+        throw std::runtime_error("No image pairs provided");
+    }
+    
+    size_t num_pairs = left_images.size();
+    
+    // Initialize CUDA
+    popsift::cuda::reset();
+    
+    if (verbose) {
+        std::cout << "PopSift version: " << POPSIFT_VERSION_STRING << std::endl;
+        std::cout << "Batch processing " << num_pairs << " image pairs" << std::endl;
+    }
+    
+    // Create configuration
+    popsift::Config config;
+    if (verbose) {
+        config.setVerbose();
+    }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
+    
+    // Initialize PopSift for matching (reuse for all pairs)
+    PopSift popSift(config, popsift::Config::MatchingMode);
+    
+    // Storage for jobs
+    std::vector<SiftJob*> left_jobs;
+    std::vector<SiftJob*> right_jobs;
+    
+    // Enqueue all images
+    if (verbose) {
+        std::cout << "Enqueuing all images..." << std::endl;
+    }
+    
+    for (size_t i = 0; i < num_pairs; i++) {
+        // Get image dimensions and data for left image
+        py::buffer_info left_buf = left_images[i].request();
+        if (left_buf.ndim != 2) {
+            throw std::runtime_error("All image arrays must be 2D (grayscale)");
+        }
+        int left_h = left_buf.shape[0];
+        int left_w = left_buf.shape[1];
+        unsigned char* left_data = static_cast<unsigned char*>(left_buf.ptr);
+        
+        // Get image dimensions and data for right image
+        py::buffer_info right_buf = right_images[i].request();
+        if (right_buf.ndim != 2) {
+            throw std::runtime_error("All image arrays must be 2D (grayscale)");
+        }
+        int right_h = right_buf.shape[0];
+        int right_w = right_buf.shape[1];
+        unsigned char* right_data = static_cast<unsigned char*>(right_buf.ptr);
+        
+        if (verbose) {
+            std::cout << "Pair " << i << " - Left: " << left_w << "x" << left_h 
+                      << ", Right: " << right_w << "x" << right_h << std::endl;
+        }
+        
+        // Enqueue both images (pipeline will process them)
+        SiftJob* lJob = popSift.enqueue(left_w, left_h, left_data);
+        SiftJob* rJob = popSift.enqueue(right_w, right_h, right_data);
+        
+        left_jobs.push_back(lJob);
+        right_jobs.push_back(rJob);
+    }
+    
+    if (verbose) {
+        std::cout << "All images enqueued. Processing and matching..." << std::endl;
+    }
+    
+    // Process results for each pair
+    std::vector<MatchResult> results;
+    results.reserve(num_pairs);
+    
+    for (size_t i = 0; i < num_pairs; i++) {
+        if (verbose) {
+            std::cout << "Processing pair " << i << "..." << std::endl;
+        }
+        
+        // Get device features (this blocks until processing is complete)
+        popsift::FeaturesDev* lFeatures = left_jobs[i]->getDev();
+        popsift::FeaturesDev* rFeatures = right_jobs[i]->getDev();
+        
+        // Get GPU extraction times
+        float left_gpu_time = left_jobs[i]->getGpuTime();
+        float right_gpu_time = right_jobs[i]->getGpuTime();
+        
+        if (verbose) {
+            std::cout << "Pair " << i << " - Left features: " << lFeatures->getFeatureCount() 
+                      << ", descriptors: " << lFeatures->getDescriptorCount() << std::endl;
+            if (print_time_info) {
+                std::cout << "Pair " << i << " - Left GPU time: " << std::fixed 
+                          << std::setprecision(2) << left_gpu_time << " ms" << std::endl;
+            }
+            std::cout << "Pair " << i << " - Right features: " << rFeatures->getFeatureCount() 
+                      << ", descriptors: " << rFeatures->getDescriptorCount() << std::endl;
+            if (print_time_info) {
+                std::cout << "Pair " << i << " - Right GPU time: " << std::fixed 
+                          << std::setprecision(2) << right_gpu_time << " ms" << std::endl;
+            }
+        }
+        
+        // Perform matching
+        float match_time_ms = 0.0f;
+        popsift::FeaturesDev::MatchInfo match_info = lFeatures->matchWithResults(rFeatures, &match_time_ms);
+        
+        // Store results
+        MatchResult result;
+        result.match_time_ms = match_time_ms;
+        result.left_gpu_time_ms = left_gpu_time;
+        result.right_gpu_time_ms = right_gpu_time;
+        result.num_matches = match_info.num_accepted_matches;
+        result.num_total_matches = match_info.num_total_matches;
+        result.matches_left_idx = match_info.left_feature_indices;
+        result.matches_right_idx = match_info.right_feature_indices;
+        result.match_distances = match_info.distances;
+        
+        if (print_time_info) {
+            std::cout << "Pair " << i << " - GPU matching time: " << std::fixed 
+                      << std::setprecision(2) << match_time_ms << " ms" << std::endl;
+        }
+        
+        results.push_back(result);
+        
+        // Cleanup features for this pair
+        delete lFeatures;
+        delete rFeatures;
+    }
+    
+    // Cleanup PopSift
+    popSift.uninit();
+    
+    if (verbose) {
+        std::cout << "Batch processing complete. Processed " << num_pairs << " pairs." << std::endl;
+    }
+    
+    return results;
+}
+
+std::vector<MatchResult> match_multiple_pairs_from_arrays(
+    const std::vector<py::array_t<unsigned char>>& left_images,
+    const std::vector<py::array_t<unsigned char>>& right_images,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    SiftConfig default_config;
+    return match_multiple_pairs_from_arrays_with_config(left_images, right_images, default_config, verbose, print_time_info);
+}
+
+std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
+    const std::vector<std::string>& left_files,
+    const std::vector<std::string>& right_files,
+    const SiftConfig& sift_config,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    if (left_files.size() != right_files.size()) {
+        throw std::runtime_error("Number of left and right files must match");
+    }
+    
+    if (left_files.empty()) {
+        throw std::runtime_error("No file pairs provided");
+    }
+    
+    size_t num_pairs = left_files.size();
+    
+    // Initialize CUDA
+    popsift::cuda::reset();
+    
+    if (verbose) {
+        std::cout << "PopSift version: " << POPSIFT_VERSION_STRING << std::endl;
+        std::cout << "Batch processing " << num_pairs << " image pairs from files" << std::endl;
+    }
+    
+    // Create configuration
+    popsift::Config config;
+    if (verbose) {
+        config.setVerbose();
+    }
+    
+    // Apply custom SIFT configuration
+    apply_sift_config(sift_config, config);
+    
+    // Initialize PopSift for matching (reuse for all pairs)
+    PopSift popSift(config, popsift::Config::MatchingMode);
+    
+    // Storage for jobs
+    std::vector<SiftJob*> left_jobs;
+    std::vector<SiftJob*> right_jobs;
+    
+    // Enqueue all images
+    if (verbose) {
+        std::cout << "Loading and enqueuing all images..." << std::endl;
+    }
+    
+    for (size_t i = 0; i < num_pairs; i++) {
+        if (verbose) {
+            std::cout << "Pair " << i << ": " << left_files[i] << " <-> " << right_files[i] << std::endl;
+        }
+        
+        // Process left and right images
+        SiftJob* lJob = process_image(left_files[i], popSift);
+        SiftJob* rJob = process_image(right_files[i], popSift);
+        
+        if (!lJob || !rJob) {
+            throw std::runtime_error("Failed to process pair " + std::to_string(i));
+        }
+        
+        left_jobs.push_back(lJob);
+        right_jobs.push_back(rJob);
+    }
+    
+    if (verbose) {
+        std::cout << "All images enqueued. Processing and matching..." << std::endl;
+    }
+    
+    // Process results for each pair
+    std::vector<MatchResult> results;
+    results.reserve(num_pairs);
+    
+    for (size_t i = 0; i < num_pairs; i++) {
+        if (verbose) {
+            std::cout << "Processing pair " << i << "..." << std::endl;
+        }
+        
+        // Get device features (this blocks until processing is complete)
+        popsift::FeaturesDev* lFeatures = left_jobs[i]->getDev();
+        popsift::FeaturesDev* rFeatures = right_jobs[i]->getDev();
+        
+        // Get GPU extraction times
+        float left_gpu_time = left_jobs[i]->getGpuTime();
+        float right_gpu_time = right_jobs[i]->getGpuTime();
+        
+        if (verbose) {
+            std::cout << "Pair " << i << " - Left features: " << lFeatures->getFeatureCount() 
+                      << ", descriptors: " << lFeatures->getDescriptorCount() << std::endl;
+            if (print_time_info) {
+                std::cout << "Pair " << i << " - Left GPU time: " << std::fixed 
+                          << std::setprecision(2) << left_gpu_time << " ms" << std::endl;
+            }
+            std::cout << "Pair " << i << " - Right features: " << rFeatures->getFeatureCount() 
+                      << ", descriptors: " << rFeatures->getDescriptorCount() << std::endl;
+            if (print_time_info) {
+                std::cout << "Pair " << i << " - Right GPU time: " << std::fixed 
+                          << std::setprecision(2) << right_gpu_time << " ms" << std::endl;
+            }
+        }
+        
+        // Perform matching
+        float match_time_ms = 0.0f;
+        popsift::FeaturesDev::MatchInfo match_info = lFeatures->matchWithResults(rFeatures, &match_time_ms);
+        
+        // Store results
+        MatchResult result;
+        result.match_time_ms = match_time_ms;
+        result.left_gpu_time_ms = left_gpu_time;
+        result.right_gpu_time_ms = right_gpu_time;
+        result.num_matches = match_info.num_accepted_matches;
+        result.num_total_matches = match_info.num_total_matches;
+        result.matches_left_idx = match_info.left_feature_indices;
+        result.matches_right_idx = match_info.right_feature_indices;
+        result.match_distances = match_info.distances;
+        
+        if (print_time_info) {
+            std::cout << "Pair " << i << " - GPU matching time: " << std::fixed 
+                      << std::setprecision(2) << match_time_ms << " ms" << std::endl;
+        }
+        
+        results.push_back(result);
+        
+        // Cleanup features for this pair
+        delete lFeatures;
+        delete rFeatures;
+    }
+    
+    // Cleanup PopSift
+    popSift.uninit();
+    
+    if (verbose) {
+        std::cout << "Batch processing complete. Processed " << num_pairs << " pairs." << std::endl;
+    }
+    
+    return results;
+}
+
+std::vector<MatchResult> match_multiple_pairs_from_files(
+    const std::vector<std::string>& left_files,
+    const std::vector<std::string>& right_files,
+    bool verbose = false,
+    bool print_time_info = false) {
+    
+    SiftConfig default_config;
+    return match_multiple_pairs_from_files_with_config(left_files, right_files, default_config, verbose, print_time_info);
+}
+
 PYBIND11_MODULE(popsift_match, m) {
     m.doc() = "PopSift SIFT feature matching Python bindings";
     
@@ -500,6 +817,37 @@ PYBIND11_MODULE(popsift_match, m) {
           "Match SIFT features from two numpy arrays with custom configuration",
           py::arg("left_image"),
           py::arg("right_image"),
+          py::arg("sift_config"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    // Batch processing functions
+    m.def("match_multiple_pairs_from_arrays", &match_multiple_pairs_from_arrays,
+          "Batch match SIFT features from multiple pairs of numpy arrays",
+          py::arg("left_images"),
+          py::arg("right_images"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("match_multiple_pairs_from_arrays_with_config", &match_multiple_pairs_from_arrays_with_config,
+          "Batch match SIFT features from multiple pairs of numpy arrays with custom configuration",
+          py::arg("left_images"),
+          py::arg("right_images"),
+          py::arg("sift_config"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("match_multiple_pairs_from_files", &match_multiple_pairs_from_files,
+          "Batch match SIFT features from multiple pairs of image files",
+          py::arg("left_files"),
+          py::arg("right_files"),
+          py::arg("verbose") = false,
+          py::arg("print_time_info") = false);
+    
+    m.def("match_multiple_pairs_from_files_with_config", &match_multiple_pairs_from_files_with_config,
+          "Batch match SIFT features from multiple pairs of image files with custom configuration",
+          py::arg("left_files"),
+          py::arg("right_files"),
           py::arg("sift_config"),
           py::arg("verbose") = false,
           py::arg("print_time_info") = false);
