@@ -255,6 +255,7 @@ struct MatchResult {
     float right_gpu_time_ms;
     int num_matches;
     int num_total_matches;
+    float total_time_ms;  // Total CPU wall-clock time
 };
 
 
@@ -263,6 +264,9 @@ MatchResult match_sift_features_from_files_with_config(const std::string& left_f
                                                       const SiftConfig& sift_config,
                                                       bool verbose = false,
                                                       bool print_time_info = false) {
+    // Start CPU timing
+    auto cpu_start = std::chrono::high_resolution_clock::now();
+    
     // Initialize CUDA
     popsift::cuda::reset();
     
@@ -341,6 +345,16 @@ MatchResult match_sift_features_from_files_with_config(const std::string& left_f
     delete rFeatures;
     popSift.uninit();
     
+    // End CPU timing
+    auto cpu_end = std::chrono::high_resolution_clock::now();
+    auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
+    result.total_time_ms = cpu_duration.count() / 1000.0f;
+    
+    if (print_time_info) {
+        std::cout << "Total CPU time: " << std::fixed << std::setprecision(2) 
+                  << result.total_time_ms << " ms" << std::endl;
+    }
+    
     return result;
 }
 
@@ -359,6 +373,9 @@ MatchResult match_sift_features_from_arrays_with_config(py::array_t<unsigned cha
                                                        const SiftConfig& sift_config,
                                                        bool verbose = false,
                                                        bool print_time_info = false) {
+    // Start CPU timing
+    auto cpu_start = std::chrono::high_resolution_clock::now();
+    
     // Initialize CUDA
     popsift::cuda::reset();
     
@@ -453,6 +470,16 @@ MatchResult match_sift_features_from_arrays_with_config(py::array_t<unsigned cha
     delete rFeatures;
     popSift.uninit();
     
+    // End CPU timing
+    auto cpu_end = std::chrono::high_resolution_clock::now();
+    auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
+    result.total_time_ms = cpu_duration.count() / 1000.0f;
+    
+    if (print_time_info) {
+        std::cout << "Total CPU time: " << std::fixed << std::setprecision(2) 
+                  << result.total_time_ms << " ms" << std::endl;
+    }
+    
     return result;
 }
 
@@ -473,6 +500,9 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
     const SiftConfig& sift_config,
     bool verbose = false,
     bool print_time_info = false) {
+    
+    // Start CPU timing for entire batch
+    auto batch_cpu_start = std::chrono::high_resolution_clock::now();
     
     if (left_images.size() != right_images.size()) {
         throw std::runtime_error("Number of left and right images must match");
@@ -554,6 +584,9 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
     results.reserve(num_pairs);
     
     for (size_t i = 0; i < num_pairs; i++) {
+        // Start timing for this pair
+        auto pair_cpu_start = std::chrono::high_resolution_clock::now();
+        
         if (verbose) {
             std::cout << "Processing pair " << i << "..." << std::endl;
         }
@@ -596,9 +629,16 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
         result.matches_right_idx = match_info.right_feature_indices;
         result.match_distances = match_info.distances;
         
+        // End timing for this pair
+        auto pair_cpu_end = std::chrono::high_resolution_clock::now();
+        auto pair_cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(pair_cpu_end - pair_cpu_start);
+        result.total_time_ms = pair_cpu_duration.count() / 1000.0f;
+        
         if (print_time_info) {
             std::cout << "Pair " << i << " - GPU matching time: " << std::fixed 
                       << std::setprecision(2) << match_time_ms << " ms" << std::endl;
+            std::cout << "Pair " << i << " - Total CPU time: " << std::fixed 
+                      << std::setprecision(2) << result.total_time_ms << " ms" << std::endl;
         }
         
         results.push_back(result);
@@ -611,8 +651,20 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
     // Cleanup PopSift
     popSift.uninit();
     
+    // End timing for entire batch
+    auto batch_cpu_end = std::chrono::high_resolution_clock::now();
+    auto batch_cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(batch_cpu_end - batch_cpu_start);
+    float batch_total_ms = batch_cpu_duration.count() / 1000.0f;
+    
     if (verbose) {
         std::cout << "Batch processing complete. Processed " << num_pairs << " pairs." << std::endl;
+        if (print_time_info) {
+            std::cout << "Total batch time: " << std::fixed << std::setprecision(2) 
+                      << batch_total_ms << " ms" << std::endl;
+            float avg_time = batch_total_ms / num_pairs;
+            std::cout << "Average per pair: " << std::fixed << std::setprecision(2) 
+                      << avg_time << " ms" << std::endl;
+        }
     }
     
     return results;
@@ -634,6 +686,9 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
     const SiftConfig& sift_config,
     bool verbose = false,
     bool print_time_info = false) {
+    
+    // Start CPU timing for entire batch
+    auto batch_cpu_start = std::chrono::high_resolution_clock::now();
     
     if (left_files.size() != right_files.size()) {
         throw std::runtime_error("Number of left and right files must match");
@@ -700,6 +755,9 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
     results.reserve(num_pairs);
     
     for (size_t i = 0; i < num_pairs; i++) {
+        // Start timing for this pair
+        auto pair_cpu_start = std::chrono::high_resolution_clock::now();
+        
         if (verbose) {
             std::cout << "Processing pair " << i << "..." << std::endl;
         }
@@ -742,9 +800,16 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
         result.matches_right_idx = match_info.right_feature_indices;
         result.match_distances = match_info.distances;
         
+        // End timing for this pair
+        auto pair_cpu_end = std::chrono::high_resolution_clock::now();
+        auto pair_cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(pair_cpu_end - pair_cpu_start);
+        result.total_time_ms = pair_cpu_duration.count() / 1000.0f;
+        
         if (print_time_info) {
             std::cout << "Pair " << i << " - GPU matching time: " << std::fixed 
                       << std::setprecision(2) << match_time_ms << " ms" << std::endl;
+            std::cout << "Pair " << i << " - Total CPU time: " << std::fixed 
+                      << std::setprecision(2) << result.total_time_ms << " ms" << std::endl;
         }
         
         results.push_back(result);
@@ -757,8 +822,20 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
     // Cleanup PopSift
     popSift.uninit();
     
+    // End timing for entire batch
+    auto batch_cpu_end = std::chrono::high_resolution_clock::now();
+    auto batch_cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(batch_cpu_end - batch_cpu_start);
+    float batch_total_ms = batch_cpu_duration.count() / 1000.0f;
+    
     if (verbose) {
         std::cout << "Batch processing complete. Processed " << num_pairs << " pairs." << std::endl;
+        if (print_time_info) {
+            std::cout << "Total batch time: " << std::fixed << std::setprecision(2) 
+                      << batch_total_ms << " ms" << std::endl;
+            float avg_time = batch_total_ms / num_pairs;
+            std::cout << "Average per pair: " << std::fixed << std::setprecision(2) 
+                      << avg_time << " ms" << std::endl;
+        }
     }
     
     return results;
@@ -788,7 +865,8 @@ PYBIND11_MODULE(popsift_match, m) {
         .def_readonly("left_gpu_time_ms", &MatchResult::left_gpu_time_ms)
         .def_readonly("right_gpu_time_ms", &MatchResult::right_gpu_time_ms)
         .def_readonly("num_matches", &MatchResult::num_matches)
-        .def_readonly("num_total_matches", &MatchResult::num_total_matches);
+        .def_readonly("num_total_matches", &MatchResult::num_total_matches)
+        .def_readonly("total_time_ms", &MatchResult::total_time_ms);
     
     // Define functions
     m.def("match_features_from_files", &match_sift_features_from_files,
