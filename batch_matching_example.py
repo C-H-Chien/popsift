@@ -261,7 +261,6 @@ def main():
 
     # example_batch_from_files(left_files, right_files)
     
-    # Performance comparison (works with dummy synthetic data):
     comparison_single_vs_batch()
 
 

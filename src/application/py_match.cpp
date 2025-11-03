@@ -255,7 +255,14 @@ struct MatchResult {
     float right_gpu_time_ms;
     int num_matches;
     int num_total_matches;
-    float total_time_ms;  // Total CPU wall-clock time
+    float total_time_ms;        // Total CPU wall-clock time for this pair
+    float batch_total_time_ms;  // Total time for entire batch (0 for single pair)
+    
+    // Detailed timing breakdown (only for batch processing)
+    float init_time_ms;         // PopSift initialization time
+    float enqueue_time_ms;      // Time spent enqueuing all images
+    float processing_time_ms;   // Time spent in getDev() + matching for all pairs
+    float cleanup_time_ms;      // PopSift cleanup time
 };
 
 
@@ -329,6 +336,11 @@ MatchResult match_sift_features_from_files_with_config(const std::string& left_f
     result.right_gpu_time_ms = right_gpu_time;
     result.num_matches = match_info.num_accepted_matches;
     result.num_total_matches = match_info.num_total_matches;
+    result.batch_total_time_ms = 0.0f;  // Single pair, not batch
+    result.init_time_ms = 0.0f;
+    result.enqueue_time_ms = 0.0f;
+    result.processing_time_ms = 0.0f;
+    result.cleanup_time_ms = 0.0f;
     
     // Copy match data
     result.matches_left_idx = match_info.left_feature_indices;
@@ -454,6 +466,11 @@ MatchResult match_sift_features_from_arrays_with_config(py::array_t<unsigned cha
     result.right_gpu_time_ms = right_gpu_time;
     result.num_matches = match_info.num_accepted_matches;
     result.num_total_matches = match_info.num_total_matches;
+    result.batch_total_time_ms = 0.0f;  // Single pair, not batch
+    result.init_time_ms = 0.0f;
+    result.enqueue_time_ms = 0.0f;
+    result.processing_time_ms = 0.0f;
+    result.cleanup_time_ms = 0.0f;
     
     // Copy match data
     result.matches_left_idx = match_info.left_feature_indices;
@@ -531,8 +548,14 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
     // Apply custom SIFT configuration
     apply_sift_config(sift_config, config);
     
+    // Measure initialization time
+    auto init_start = std::chrono::high_resolution_clock::now();
+    
     // Initialize PopSift for matching (reuse for all pairs)
     PopSift popSift(config, popsift::Config::MatchingMode);
+    
+    auto init_end = std::chrono::high_resolution_clock::now();
+    float init_time = std::chrono::duration_cast<std::chrono::microseconds>(init_end - init_start).count() / 1000.0f;
     
     // Storage for jobs
     std::vector<SiftJob*> left_jobs;
@@ -542,6 +565,8 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
     if (verbose) {
         std::cout << "Enqueuing all images..." << std::endl;
     }
+    
+    auto enqueue_start = std::chrono::high_resolution_clock::now();
     
     for (size_t i = 0; i < num_pairs; i++) {
         // Get image dimensions and data for left image
@@ -575,9 +600,15 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
         right_jobs.push_back(rJob);
     }
     
+    auto enqueue_end = std::chrono::high_resolution_clock::now();
+    float enqueue_time = std::chrono::duration_cast<std::chrono::microseconds>(enqueue_end - enqueue_start).count() / 1000.0f;
+    
     if (verbose) {
         std::cout << "All images enqueued. Processing and matching..." << std::endl;
     }
+    
+    // Measure processing time (getDev + matching for all pairs)
+    auto processing_start = std::chrono::high_resolution_clock::now();
     
     // Process results for each pair
     std::vector<MatchResult> results;
@@ -648,13 +679,31 @@ std::vector<MatchResult> match_multiple_pairs_from_arrays_with_config(
         delete rFeatures;
     }
     
+    auto processing_end = std::chrono::high_resolution_clock::now();
+    float processing_time = std::chrono::duration_cast<std::chrono::microseconds>(processing_end - processing_start).count() / 1000.0f;
+    
+    // Measure cleanup time
+    auto cleanup_start = std::chrono::high_resolution_clock::now();
+    
     // Cleanup PopSift
     popSift.uninit();
+    
+    auto cleanup_end = std::chrono::high_resolution_clock::now();
+    float cleanup_time = std::chrono::duration_cast<std::chrono::microseconds>(cleanup_end - cleanup_start).count() / 1000.0f;
     
     // End timing for entire batch
     auto batch_cpu_end = std::chrono::high_resolution_clock::now();
     auto batch_cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(batch_cpu_end - batch_cpu_start);
     float batch_total_ms = batch_cpu_duration.count() / 1000.0f;
+    
+    // Store all timing info in all results
+    for (auto& result : results) {
+        result.batch_total_time_ms = batch_total_ms;
+        result.init_time_ms = init_time;
+        result.enqueue_time_ms = enqueue_time;
+        result.processing_time_ms = processing_time;
+        result.cleanup_time_ms = cleanup_time;
+    }
     
     if (verbose) {
         std::cout << "Batch processing complete. Processed " << num_pairs << " pairs." << std::endl;
@@ -717,8 +766,14 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
     // Apply custom SIFT configuration
     apply_sift_config(sift_config, config);
     
+    // Measure initialization time
+    auto init_start = std::chrono::high_resolution_clock::now();
+    
     // Initialize PopSift for matching (reuse for all pairs)
     PopSift popSift(config, popsift::Config::MatchingMode);
+    
+    auto init_end = std::chrono::high_resolution_clock::now();
+    float init_time = std::chrono::duration_cast<std::chrono::microseconds>(init_end - init_start).count() / 1000.0f;
     
     // Storage for jobs
     std::vector<SiftJob*> left_jobs;
@@ -728,6 +783,8 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
     if (verbose) {
         std::cout << "Loading and enqueuing all images..." << std::endl;
     }
+    
+    auto enqueue_start = std::chrono::high_resolution_clock::now();
     
     for (size_t i = 0; i < num_pairs; i++) {
         if (verbose) {
@@ -746,9 +803,15 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
         right_jobs.push_back(rJob);
     }
     
+    auto enqueue_end = std::chrono::high_resolution_clock::now();
+    float enqueue_time = std::chrono::duration_cast<std::chrono::microseconds>(enqueue_end - enqueue_start).count() / 1000.0f;
+    
     if (verbose) {
         std::cout << "All images enqueued. Processing and matching..." << std::endl;
     }
+    
+    // Measure processing time (getDev + matching for all pairs)
+    auto processing_start = std::chrono::high_resolution_clock::now();
     
     // Process results for each pair
     std::vector<MatchResult> results;
@@ -819,13 +882,31 @@ std::vector<MatchResult> match_multiple_pairs_from_files_with_config(
         delete rFeatures;
     }
     
+    auto processing_end = std::chrono::high_resolution_clock::now();
+    float processing_time = std::chrono::duration_cast<std::chrono::microseconds>(processing_end - processing_start).count() / 1000.0f;
+    
+    // Measure cleanup time
+    auto cleanup_start = std::chrono::high_resolution_clock::now();
+    
     // Cleanup PopSift
     popSift.uninit();
+    
+    auto cleanup_end = std::chrono::high_resolution_clock::now();
+    float cleanup_time = std::chrono::duration_cast<std::chrono::microseconds>(cleanup_end - cleanup_start).count() / 1000.0f;
     
     // End timing for entire batch
     auto batch_cpu_end = std::chrono::high_resolution_clock::now();
     auto batch_cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(batch_cpu_end - batch_cpu_start);
     float batch_total_ms = batch_cpu_duration.count() / 1000.0f;
+    
+    // Store all timing info in all results
+    for (auto& result : results) {
+        result.batch_total_time_ms = batch_total_ms;
+        result.init_time_ms = init_time;
+        result.enqueue_time_ms = enqueue_time;
+        result.processing_time_ms = processing_time;
+        result.cleanup_time_ms = cleanup_time;
+    }
     
     if (verbose) {
         std::cout << "Batch processing complete. Processed " << num_pairs << " pairs." << std::endl;
@@ -866,7 +947,12 @@ PYBIND11_MODULE(popsift_match, m) {
         .def_readonly("right_gpu_time_ms", &MatchResult::right_gpu_time_ms)
         .def_readonly("num_matches", &MatchResult::num_matches)
         .def_readonly("num_total_matches", &MatchResult::num_total_matches)
-        .def_readonly("total_time_ms", &MatchResult::total_time_ms);
+        .def_readonly("total_time_ms", &MatchResult::total_time_ms)
+        .def_readonly("batch_total_time_ms", &MatchResult::batch_total_time_ms)
+        .def_readonly("init_time_ms", &MatchResult::init_time_ms)
+        .def_readonly("enqueue_time_ms", &MatchResult::enqueue_time_ms)
+        .def_readonly("processing_time_ms", &MatchResult::processing_time_ms)
+        .def_readonly("cleanup_time_ms", &MatchResult::cleanup_time_ms);
     
     // Define functions
     m.def("match_features_from_files", &match_sift_features_from_files,

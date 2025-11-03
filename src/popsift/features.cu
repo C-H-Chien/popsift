@@ -357,49 +357,49 @@ void FeaturesDev::match( FeaturesDev* other, float* match_time_ms )
     cudaMemcpy( h_match_results, d_match_results, l_len * sizeof(MatchResult), cudaMemcpyDeviceToHost );
     
     //> Write matching results to file
-    std::ofstream match_file( "feature-matches.txt" );
-    if( match_file.is_open() ) {
-        match_file << "# Feature matching results\n";
-        match_file << "# Format: left_feature_idx left_descriptor_idx right_feature_idx right_descriptor_idx second_feature_idx second_descriptor_idx distance1 distance2 accepted\n";
-        match_file << "# accepted: 1 = match accepted, 0 = match rejected\n";
+    // std::ofstream match_file( "feature-matches.txt" );
+    // if( match_file.is_open() ) {
+    //     match_file << "# Feature matching results\n";
+    //     match_file << "# Format: left_feature_idx left_descriptor_idx right_feature_idx right_descriptor_idx second_feature_idx second_descriptor_idx distance1 distance2 accepted\n";
+    //     match_file << "# accepted: 1 = match accepted, 0 = match rejected\n";
         
-        int accepted_count = 0;
-        int rejected_count = 0;
+    //     int accepted_count = 0;
+    //     int rejected_count = 0;
         
-        for( int i = 0; i < l_len; i++ ) {
-            match_file << h_match_results[i].left_feature_idx << " "
-                      << h_match_results[i].left_descriptor_idx << " "
-                      << h_match_results[i].right_feature_idx << " "
-                      << h_match_results[i].right_descriptor_idx << " "
-                      << h_match_results[i].second_feature_idx << " "
-                      << h_match_results[i].second_descriptor_idx << " "
-                      << std::fixed << std::setprecision(3) 
-                      << h_match_results[i].distance1 << " "
-                      << h_match_results[i].distance2 << " "
-                      << (h_match_results[i].accepted ? 1 : 0) << "\n";
+    //     for( int i = 0; i < l_len; i++ ) {
+    //         match_file << h_match_results[i].left_feature_idx << " "
+    //                   << h_match_results[i].left_descriptor_idx << " "
+    //                   << h_match_results[i].right_feature_idx << " "
+    //                   << h_match_results[i].right_descriptor_idx << " "
+    //                   << h_match_results[i].second_feature_idx << " "
+    //                   << h_match_results[i].second_descriptor_idx << " "
+    //                   << std::fixed << std::setprecision(3) 
+    //                   << h_match_results[i].distance1 << " "
+    //                   << h_match_results[i].distance2 << " "
+    //                   << (h_match_results[i].accepted ? 1 : 0) << "\n";
             
-            if( h_match_results[i].accepted ) {
-                accepted_count++;
-            } else {
-                rejected_count++;
-            }
-        }
+    //         if( h_match_results[i].accepted ) {
+    //             accepted_count++;
+    //         } else {
+    //             rejected_count++;
+    //         }
+    //     }
         
-        match_file << "\n# Summary:\n";
-        match_file << "# Total matches: " << l_len << "\n";
-        match_file << "# Accepted matches: " << accepted_count << "\n";
-        match_file << "# Rejected matches: " << rejected_count << "\n";
-        match_file << "# Acceptance rate: " << std::fixed << std::setprecision(2) 
-                   << (100.0 * accepted_count / l_len) << "%\n";
+    //     match_file << "\n# Summary:\n";
+    //     match_file << "# Total matches: " << l_len << "\n";
+    //     match_file << "# Accepted matches: " << accepted_count << "\n";
+    //     match_file << "# Rejected matches: " << rejected_count << "\n";
+    //     match_file << "# Acceptance rate: " << std::fixed << std::setprecision(2) 
+    //                << (100.0 * accepted_count / l_len) << "%\n";
         
-        match_file.close();
-        std::cout << "Feature matching results written to feature-matches.txt" << std::endl;
-        std::cout << "Accepted matches: " << accepted_count << " / " << l_len 
-                  << " (" << std::fixed << std::setprecision(2) 
-                  << (100.0 * accepted_count / l_len) << "%)" << std::endl;
-    } else {
-        std::cerr << "Warning: Could not open feature-matches.txt for writing" << std::endl;
-    }
+    //     match_file.close();
+    //     std::cout << "Feature matching results written to feature-matches.txt" << std::endl;
+    //     std::cout << "Accepted matches: " << accepted_count << " / " << l_len 
+    //               << " (" << std::fixed << std::setprecision(2) 
+    //               << (100.0 * accepted_count / l_len) << "%)" << std::endl;
+    // } else {
+    //     std::cerr << "Warning: Could not open feature-matches.txt for writing" << std::endl;
+    // }
     
     delete[] h_match_results;
     cudaFree( d_match_results );
@@ -505,49 +505,49 @@ FeaturesDev::MatchInfo FeaturesDev::matchWithResults( FeaturesDev* other, float*
     cudaMemcpy( h_match_results, d_match_results, l_len * sizeof(MatchResult), cudaMemcpyDeviceToHost );
     
     //> Write matching results to file
-    std::ofstream match_file( "feature-matches.txt" );
-    if( match_file.is_open() ) {
-        match_file << "# Feature matching results\n";
-        match_file << "# Format: left_feature_idx left_descriptor_idx right_feature_idx right_descriptor_idx second_feature_idx second_descriptor_idx distance1 distance2 accepted\n";
-        match_file << "# accepted: 1 = match accepted, 0 = match rejected\n";
+    // std::ofstream match_file( "feature-matches.txt" );
+    // if( match_file.is_open() ) {
+    //     match_file << "# Feature matching results\n";
+    //     match_file << "# Format: left_feature_idx left_descriptor_idx right_feature_idx right_descriptor_idx second_feature_idx second_descriptor_idx distance1 distance2 accepted\n";
+    //     match_file << "# accepted: 1 = match accepted, 0 = match rejected\n";
         
-        int accepted_count = 0;
-        int rejected_count = 0;
+    //     int accepted_count = 0;
+    //     int rejected_count = 0;
         
-        for( int i = 0; i < l_len; i++ ) {
-            match_file << h_match_results[i].left_feature_idx << " "
-                      << h_match_results[i].left_descriptor_idx << " "
-                      << h_match_results[i].right_feature_idx << " "
-                      << h_match_results[i].right_descriptor_idx << " "
-                      << h_match_results[i].second_feature_idx << " "
-                      << h_match_results[i].second_descriptor_idx << " "
-                      << std::fixed << std::setprecision(3) 
-                      << h_match_results[i].distance1 << " "
-                      << h_match_results[i].distance2 << " "
-                      << (h_match_results[i].accepted ? 1 : 0) << "\n";
+    //     for( int i = 0; i < l_len; i++ ) {
+    //         match_file << h_match_results[i].left_feature_idx << " "
+    //                   << h_match_results[i].left_descriptor_idx << " "
+    //                   << h_match_results[i].right_feature_idx << " "
+    //                   << h_match_results[i].right_descriptor_idx << " "
+    //                   << h_match_results[i].second_feature_idx << " "
+    //                   << h_match_results[i].second_descriptor_idx << " "
+    //                   << std::fixed << std::setprecision(3) 
+    //                   << h_match_results[i].distance1 << " "
+    //                   << h_match_results[i].distance2 << " "
+    //                   << (h_match_results[i].accepted ? 1 : 0) << "\n";
             
-            if( h_match_results[i].accepted ) {
-                accepted_count++;
-            } else {
-                rejected_count++;
-            }
-        }
+    //         if( h_match_results[i].accepted ) {
+    //             accepted_count++;
+    //         } else {
+    //             rejected_count++;
+    //         }
+    //     }
         
-        match_file << "\n# Summary:\n";
-        match_file << "# Total matches: " << l_len << "\n";
-        match_file << "# Accepted matches: " << accepted_count << "\n";
-        match_file << "# Rejected matches: " << rejected_count << "\n";
-        match_file << "# Acceptance rate: " << std::fixed << std::setprecision(2) 
-                   << (100.0 * accepted_count / l_len) << "%\n";
+    //     match_file << "\n# Summary:\n";
+    //     match_file << "# Total matches: " << l_len << "\n";
+    //     match_file << "# Accepted matches: " << accepted_count << "\n";
+    //     match_file << "# Rejected matches: " << rejected_count << "\n";
+    //     match_file << "# Acceptance rate: " << std::fixed << std::setprecision(2) 
+    //                << (100.0 * accepted_count / l_len) << "%\n";
         
-        match_file.close();
-        std::cout << "Feature matching results written to feature-matches.txt" << std::endl;
-        std::cout << "Accepted matches: " << accepted_count << " / " << l_len 
-                  << " (" << std::fixed << std::setprecision(2) 
-                  << (100.0 * accepted_count / l_len) << "%)" << std::endl;
-    } else {
-        std::cerr << "Warning: Could not open feature-matches.txt for writing" << std::endl;
-    }
+    //     match_file.close();
+    //     std::cout << "Feature matching results written to feature-matches.txt" << std::endl;
+    //     std::cout << "Accepted matches: " << accepted_count << " / " << l_len 
+    //               << " (" << std::fixed << std::setprecision(2) 
+    //               << (100.0 * accepted_count / l_len) << "%)" << std::endl;
+    // } else {
+    //     std::cerr << "Warning: Could not open feature-matches.txt for writing" << std::endl;
+    // }
     
     // Extract accepted matches
     MatchInfo match_info;
