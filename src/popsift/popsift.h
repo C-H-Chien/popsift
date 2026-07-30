@@ -182,6 +182,12 @@ public:
     void uninit( );
 
     /**
+     * @brief Get the current configuration (including calculated values like octaves)
+     * @return Reference to the internal config
+     */
+    const popsift::Config& getConfig() const;
+
+    /**
      *  @brief Check whether the current CUDA device can support the image
      *  resolution (width,height) with the current configuration
      *  based on the card's texture engine.

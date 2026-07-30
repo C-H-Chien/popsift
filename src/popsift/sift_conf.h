@@ -344,6 +344,11 @@ struct Config
 
     bool equal( const Config& other ) const;
 
+    /**
+     * @brief Print all configuration parameters to stdout
+     */
+    void print() const;
+
 private:
     /// default threshold 0.0 default of vlFeat
     /// default threshold 5.0 / 256.0

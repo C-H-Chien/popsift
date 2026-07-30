@@ -88,6 +88,11 @@ bool PopSift::configure( const popsift::Config& config, bool /*force*/ )
     return true;
 }
 
+const popsift::Config& PopSift::getConfig() const
+{
+    return _config;
+}
+
 bool PopSift::applyConfiguration(bool force)
 {
     if( force || ( _config  != _shadow_config ) )

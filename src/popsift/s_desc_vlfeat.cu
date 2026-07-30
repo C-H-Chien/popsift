@@ -47,7 +47,7 @@ void ext_desc_vlfeat_sub( const float         ang,
     const float crsbp = cos_t / SBP;
     const float srsbp = sin_t / SBP;
 
-    // We have 4x4*16 bins.
+    // We have 4x4=16 bins.
     // There centers have the offsets -1.5, -0.5, 0.5, 1.5 from the
     // keypoint. The points that support them stretch from -2 to 2
     const float2 maxdist = make_float2( -2.0f, -2.0f );
@@ -60,6 +60,8 @@ void ext_desc_vlfeat_sub( const float         ang,
 
     const float bsz = 2.0f * ( fabsf(csbp) + fabsf(ssbp) );
 
+    //> ptx + bsz is the horizontal half-width of the support region
+    //> pty + bsz is the vertical half-width of the support region
     const int   xmin = max(1,          (int)floorf(x - ptx - bsz));
     const int   ymin = max(1,          (int)floorf(y - pty - bsz));
     const int   xmax = min(width - 2,  (int)floorf(x + ptx + bsz));
@@ -67,6 +69,7 @@ void ext_desc_vlfeat_sub( const float         ang,
 
     __shared__ float dpt[128];
 
+    //> blockDim.x = 32
     for( int i=threadIdx.x; i<128; i+=blockDim.x )
     {
         dpt[i] = 0.0f;
@@ -163,7 +166,7 @@ void ext_desc_vlfeat_sub( const float         ang,
 __global__ void ext_desc_vlfeat( int octave, cudaTextureObject_t layer_tex, int w, int h)
 {
     const int   o_offset =  dct.ori_ps[octave] + blockIdx.x;
-    Descriptor* desc     = &dbuf.desc           [o_offset];
+    Descriptor* desc     =  &dbuf.desc           [o_offset];
     const int   ext_idx  =  dobuf.feat_to_ext_map[o_offset];
     Extremum*   ext      =  dobuf.extrema + ext_idx;
 

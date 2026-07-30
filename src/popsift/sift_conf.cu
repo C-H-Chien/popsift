@@ -9,6 +9,9 @@
 #include "sift_conf.h"
 
 #include <iostream>
+#include <iomanip>
+#include <cmath>
+#include <algorithm>
 
 using namespace std;
 
@@ -26,7 +29,8 @@ Config::Config( )
     , _sift_mode( Config::PopSift )
     , _log_mode( Config::None )
     , _scaling_mode( Config::ScaleDefault )
-    , _desc_mode( Config::VLFeat_Desc )
+    // , _desc_mode( Config::VLFeat_Desc )
+    , _desc_mode( Config::Loop )
     , _grid_filter_mode( Config::LargestScaleFirst )
     , verbose( false )
     // , _max_extrema( 20000 )
@@ -322,6 +326,162 @@ bool Config::equal( const Config& other ) const
         COMPARE( _normalization_mode ) ||
         COMPARE( _normalization_multiplier ) ) return false;
     return true;
+}
+
+void Config::print() const
+{
+    std::cout << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "PopSift Configuration Parameters" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
+    // Basic parameters
+    std::cout << "Octaves:              ";
+    if( octaves < 0 ) {
+        std::cout << "auto (will be calculated as: log₂(min(w,h)) - 3 + scale_factor)" << std::endl;
+    } else {
+        std::cout << octaves << std::endl;
+    }
+    
+    std::cout << "Levels per octave:    " << levels << std::endl;
+    std::cout << "Sigma:                " << sigma << std::endl;
+    
+    // Calculate Gaussian kernel size based on initial sigma and mode
+    int gauss_kernel_size = 0;
+    float effective_sigma = sigma;
+    if( _assume_initial_blur && _initial_blur > 0.0f ) {
+        effective_sigma = sqrtf( sigma * sigma - _initial_blur * _initial_blur * powf( 2.0f, getUpscaleFactor() ) * powf( 2.0f, getUpscaleFactor() ) );
+        if( effective_sigma < 0.0f ) effective_sigma = sigma;
+    }
+    
+    switch( _gauss_mode ) {
+        case VLFeat_Relative_All:
+        case VLFeat_Compute: {
+            int spn = std::min<int>( (int)ceilf( 4.0f * effective_sigma ) + 1, 127 );
+            gauss_kernel_size = spn * 2 - 1; // Full width (half-width * 2 - 1 for center)
+            break;
+        }
+        case VLFeat_Relative: {
+            int spn = std::min<int>( (int)ceilf( 4.0f * effective_sigma ) + 1, 127 );
+            if( ( spn & 1 ) == 0 ) spn += 1;
+            gauss_kernel_size = spn * 2 - 1;
+            break;
+        }
+        case OpenCV_Compute: {
+            int span = int( roundf( 2.0f * 4.0f * effective_sigma + 1.0f ) ) | 1;
+            span >>= 1;
+            span += 1;
+            span = std::min<int>( span, 127 );
+            gauss_kernel_size = span * 2 - 1;
+            break;
+        }
+        case Fixed9:
+            gauss_kernel_size = 9;
+            break;
+        case Fixed15:
+            gauss_kernel_size = 15;
+            break;
+        default:
+            gauss_kernel_size = 0;
+            break;
+    }
+    
+    std::cout << "Gaussian kernel size: " << gauss_kernel_size << "x" << gauss_kernel_size;
+    if( gauss_kernel_size > 0 && effective_sigma != sigma ) {
+        std::cout << " (for effective sigma=" << std::fixed << std::setprecision(3) << effective_sigma 
+                  << ", initial sigma=" << sigma << ")";
+    } else if( gauss_kernel_size > 0 ) {
+        std::cout << " (for initial sigma=" << std::fixed << std::setprecision(3) << effective_sigma << ")";
+    }
+    std::cout << std::endl;
+    std::cout << "  (Note: kernel size varies by level and octave)" << std::endl;
+    
+    std::cout << "Threshold:            " << _threshold << std::endl;
+    std::cout << "Edge limit:           " << _edge_limit << std::endl;
+    
+    // Upscale/downsampling
+    std::cout << "Upscale factor:       " << getUpscaleFactor() << std::endl;
+    if( getUpscaleFactor() < 0 ) {
+        std::cout << "  (Downsampling by:  " << -getUpscaleFactor() << "x)" << std::endl;
+    }
+    
+    // Initial blur
+    std::cout << "Assume initial blur:  " << (_assume_initial_blur ? "yes" : "no") << std::endl;
+    if( _assume_initial_blur ) {
+        std::cout << "Initial blur:        " << _initial_blur << std::endl;
+    }
+    
+    // Extrema filtering
+    std::cout << "Max extrema:          " << getMaxExtrema() << std::endl;
+    std::cout << "Filter max extrema:  ";
+    if( _filter_max_extrema < 0 ) {
+        std::cout << "unlimited" << std::endl;
+    } else {
+        std::cout << _filter_max_extrema << std::endl;
+    }
+    std::cout << "Filter grid size:     " << _filter_grid_size << "x" << _filter_grid_size << std::endl;
+    
+    // Modes
+    const char* sift_mode_str = "Unknown";
+    switch( _sift_mode ) {
+        case PopSift: sift_mode_str = "PopSift"; break;
+        case OpenCV: sift_mode_str = "OpenCV"; break;
+        case VLFeat: sift_mode_str = "VLFeat"; break;
+    }
+    std::cout << "SIFT mode:            " << sift_mode_str << std::endl;
+    
+    const char* gauss_mode_str = "Unknown";
+    switch( _gauss_mode ) {
+        case VLFeat_Compute: gauss_mode_str = "VLFeat_Compute"; break;
+        case VLFeat_Relative: gauss_mode_str = "VLFeat_Relative"; break;
+        case VLFeat_Relative_All: gauss_mode_str = "VLFeat_Relative_All"; break;
+        case OpenCV_Compute: gauss_mode_str = "OpenCV_Compute"; break;
+        case Fixed9: gauss_mode_str = "Fixed9"; break;
+        case Fixed15: gauss_mode_str = "Fixed15"; break;
+    }
+    std::cout << "Gauss mode:           " << gauss_mode_str << std::endl;
+    
+    const char* desc_mode_str = "Unknown";
+    switch( _desc_mode ) {
+        case Loop: desc_mode_str = "Loop"; break;
+        case Grid: desc_mode_str = "Grid"; break;
+        case VLFeat_Desc: desc_mode_str = "VLFeat_Desc"; break;
+        case NoTile: desc_mode_str = "NoTile"; break;
+        case ILoop: desc_mode_str = "ILoop"; break;
+        case IGrid: desc_mode_str = "IGrid"; break;
+    }
+    std::cout << "Descriptor mode:      " << desc_mode_str << std::endl;
+    
+    const char* scaling_mode_str = (_scaling_mode == ScaleDirect) ? "ScaleDirect" : "ScaleDefault";
+    std::cout << "Scaling mode:         " << scaling_mode_str << std::endl;
+    
+    const char* grid_filter_str = "Unknown";
+    switch( _grid_filter_mode ) {
+        case LargestScaleFirst: grid_filter_str = "LargestScaleFirst"; break;
+        case RandomScale: grid_filter_str = "RandomScale"; break;
+    }
+    std::cout << "Grid filter mode:     " << grid_filter_str << std::endl;
+    
+    // Normalization
+    const char* norm_mode_str = (_normalization_mode == RootSift) ? "RootSift (L1-like)" : "Classic (L2-like)";
+    std::cout << "Normalization mode:   " << norm_mode_str << std::endl;
+    std::cout << "Norm multiplier:      " << _normalization_multiplier;
+    if( _normalization_multiplier > 0 ) {
+        std::cout << " (2^" << _normalization_multiplier << ")";
+    }
+    std::cout << std::endl;
+    
+    // Logging
+    const char* log_mode_str = (_log_mode == All) ? "All" : "None";
+    std::cout << "Log mode:             " << log_mode_str << std::endl;
+    std::cout << "Verbose:              " << (verbose ? "yes" : "no") << std::endl;
+    std::cout << "Print Gauss tables:    " << (_print_gauss_tables ? "yes" : "no") << std::endl;
+    
+    // Peak threshold (computed)
+    std::cout << "Peak threshold:       " << getPeakThreshold() << " (computed)" << std::endl;
+    
+    std::cout << "========================================" << std::endl;
+    std::cout << std::endl;
 }
 
 }; // namespace popsift

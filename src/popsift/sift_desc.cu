@@ -59,7 +59,9 @@ void Pyramid::descriptors( const Config& conf )
             Octave& oct_obj = _octaves[octave];
 
             if( conf.getDescMode() == Config::Loop ) {
-                start_ext_desc_loop(  octave, oct_obj );
+                // start_ext_desc_loop(  octave, oct_obj );
+                // start_ext_desc_loop_cached( octave, oct_obj );
+                start_ext_desc_loop_per_cell( octave, oct_obj );
             } else if( conf.getDescMode() == Config::ILoop ) {
                 start_ext_desc_iloop( octave, oct_obj );
             } else if( conf.getDescMode() == Config::Grid ) {
