@@ -299,6 +299,9 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    // Print configuration parameters
+    config.print();
+
     if( boost::filesystem::exists( inputFile ) ) {
         if( boost::filesystem::is_directory( inputFile ) ) {
             cout << "BOOST " << inputFile << " is directory" << endl;
@@ -324,10 +327,21 @@ int main(int argc, char **argv)
                      float_mode ? PopSift::FloatImages : PopSift::ByteImages );
 
     std::queue<SiftJob*> jobs;
+    bool first_image_processed = false;
     for(const auto& currFile : inputFiles)
     {
         SiftJob* job = process_image( currFile, PopSift );
         jobs.push( job );
+        
+        // Print actual number of octaves after first image is processed (when auto-calculated)
+        // Access the config from PopSift since it's updated there, not in the original config object
+        if( !first_image_processed ) {
+            const popsift::Config& popsift_config = PopSift.getConfig();
+            if( popsift_config.octaves >= 0 ) {
+                std::cout << std::endl << "Actual number of octaves (calculated): " << popsift_config.octaves << std::endl << std::endl;
+                first_image_processed = true;
+            }
+        }
     }
 
     // Process jobs and collect GPU timing

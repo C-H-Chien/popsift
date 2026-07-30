@@ -253,6 +253,9 @@ int main(int argc, char **argv)
         return EXIT_SUCCESS;
     }
 
+    // Print configuration parameters
+    config.print();
+
     if( boost::filesystem::exists( lFile ) ) {
         if( ! boost::filesystem::is_regular_file( lFile ) ) {
             cout << "Input file " << lFile << " is not a regular file, nothing to do" << endl;
@@ -274,6 +277,14 @@ int main(int argc, char **argv)
     PopSift PopSift( config, popsift::Config::MatchingMode );
 
     SiftJob* lJob = process_image( lFile, PopSift );
+    
+    // Print actual number of octaves after first image is processed (when auto-calculated)
+    // Access the config from PopSift since it's updated there, not in the original config object
+    const popsift::Config& popsift_config = PopSift.getConfig();
+    if( popsift_config.octaves >= 0 ) {
+        std::cout << std::endl << "Actual number of octaves (calculated): " << popsift_config.octaves << std::endl << std::endl;
+    }
+    
     SiftJob* rJob = process_image( rFile, PopSift );
 
     popsift::FeaturesDev* lFeatures = lJob->getDev();
