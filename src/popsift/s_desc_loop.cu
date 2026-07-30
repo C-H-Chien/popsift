@@ -182,96 +182,6 @@ struct DescriptorLoopCache
     int    valid;
 };
 
-__device__ static inline
-void ext_desc_loop_cached_sub( const DescriptorLoopCache& cache,
-                               cudaTextureObject_t         layer_tex,
-                               const int                   width,
-                               const int                   height )
-{
-#ifndef BLOCK_3_DIMS
-    const int ix   = threadIdx.y;
-    const int iy   = threadIdx.z;
-    const int tile = ( ( ( iy << 2 ) + ix ) << 3 );
-#else
-    const int ix   = ( threadIdx.z &  0x3 );
-    const int iy   = ( threadIdx.z >> 2 );
-    const int tile = ( threadIdx.z << 3 );
-#endif
-
-    if( !cache.valid ) {
-        return;
-    }
-
-    const float2 offsetpt = make_float2( ix - 1.5f,
-                                         iy - 1.5f );
-
-    const float ptx = ::fmaf( cache.csbp, offsetpt.x, ::fmaf( -cache.ssbp, offsetpt.y, cache.x ) );
-    const float pty = ::fmaf( cache.csbp, offsetpt.y, ::fmaf(  cache.ssbp, offsetpt.x, cache.y ) );
-    const int xmin = max(1,         (int)floorf(ptx - cache.bsz));
-    const int ymin = max(1,         (int)floorf(pty - cache.bsz));
-    const int xmax = min(width - 2,  (int)floorf(ptx + cache.bsz));
-    const int ymax = min(height - 2, (int)floorf(pty + cache.bsz));
-
-    const int wx    = xmax - xmin + 1;
-    const int hy    = ymax - ymin + 1;
-    const int loops = wx * hy;
-
-    float dpt[9] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-
-    for( int i = threadIdx.x; popsift::any(i < loops); i+=blockDim.x )
-    {
-        if( i >= loops ) continue;
-
-        const int ii = i / wx + ymin;
-        const int jj = i % wx + xmin;
-
-        const float2 d = make_float2( jj - ptx, ii - pty );
-        const float2 n = make_float2( ::fmaf( cache.crsbp, d.x,  cache.srsbp * d.y ), ::fmaf( cache.crsbp, d.y, -cache.srsbp * d.x ) );
-        const float2 nn = abs(n);
-
-        if( nn.x < 1.0f && nn.y < 1.0f ) {
-            float grad_mag;
-            float grad_theta;
-            get_gradiant( grad_mag, grad_theta, jj, ii, layer_tex, cache.level );
-
-            const float2 dn = n + offsetpt;
-            const float  ww = __expf( -scalbnf(dn.x*dn.x + dn.y*dn.y, -3) );
-            const float2 w  = make_float2( 1.0f - nn.x, 1.0f - nn.y );
-            const float wgt = ww * w.x * w.y * grad_mag;
-
-            grad_theta -= cache.ang;
-            grad_theta += ( grad_theta <  0.0f  ? M_PI2 : 0.0f );
-            grad_theta -= ( grad_theta >= M_PI2 ? M_PI2 : 0.0f );
-
-            const float tth  = __fmul_ru( grad_theta, M_4RPI );
-            const int   fo0  = (int)floorf(tth);
-            const float do0  = tth - fo0;
-            const float wgt1 = 1.0f - do0;
-            const float wgt2 = do0;
-            const int   fo   = fo0 % DESC_BINS;
-
-            dpt[fo]   = __fmaf_ru( wgt1, wgt, dpt[fo] );
-            dpt[fo+1] = __fmaf_ru( wgt2, wgt, dpt[fo+1] );
-        }
-    }
-    __syncthreads();
-
-    dpt[0] += dpt[8];
-
-    for( int i = 0; i < 8; i++ ) {
-        dpt[i] += popsift::shuffle_down( dpt[i], 16 );
-        dpt[i] += popsift::shuffle_down( dpt[i], 8 );
-        dpt[i] += popsift::shuffle_down( dpt[i], 4 );
-        dpt[i] += popsift::shuffle_down( dpt[i], 2 );
-        dpt[i] += popsift::shuffle_down( dpt[i], 1 );
-        dpt[i]  = popsift::shuffle( dpt[i], 0 );
-    }
-
-    if( threadIdx.x < 8 ) {
-        cache.features[tile+threadIdx.x] = dpt[threadIdx.x];
-    }
-}
-
 __global__ void ext_desc_loop(int octave, cudaTextureObject_t layer_tex, int w, int h)
 {
     const int   o_offset =  dct.ori_ps[octave] + blockIdx.x;
@@ -291,45 +201,9 @@ __global__ void ext_desc_loop(int octave, cudaTextureObject_t layer_tex, int w, 
                        h );
 }
 
-__global__ void ext_desc_loop_cached(int octave, cudaTextureObject_t layer_tex, int w, int h)
-{
-    __shared__ DescriptorLoopCache cache;
-
-    if( threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 ) {
-        const int   o_offset = dct.ori_ps[octave] + blockIdx.x;
-        Descriptor* desc     = &dbuf.desc[o_offset];
-        const int   ext_idx  = dobuf.feat_to_ext_map[o_offset];
-        Extremum*   ext      = dobuf.extrema + ext_idx;
-        const int   ori_num  = o_offset - ext->idx_ori;
-        const float sig      = ext->sigma;
-        const float sbp      = fabsf(DESC_MAGNIFY * sig);
-
-        cache.features = desc->features;
-        cache.ang      = ext->orientation[ori_num];
-        cache.x        = ext->xpos;
-        cache.y        = ext->ypos;
-        cache.level    = ext->lpos;
-        cache.valid    = ( sbp != 0.0f );
-
-        if( cache.valid ) {
-            float sin_t;
-            float cos_t;
-            __sincosf( cache.ang, &sin_t, &cos_t );
-
-            cache.csbp  = cos_t * sbp;
-            cache.ssbp  = sin_t * sbp;
-            cache.crsbp = cos_t / sbp;
-            cache.srsbp = sin_t / sbp;
-            cache.bsz   = fabsf(cache.csbp) + fabsf(cache.ssbp);
-        }
-    }
-    __syncthreads();
-
-    ext_desc_loop_cached_sub( cache, layer_tex, w, h );
-}
-
-/* One CUDA block processes one of the 4x4 spatial cell of one descriptor.
- * Dimensions: grid (num_of_keypoints, 16) / block (32,1,1).
+/* One warp processes one of the 4x4 spatial cells of one descriptor.
+ * Several warps share a block (default: 4 warps = 4 cells per block).
+ * Dimensions: grid (num_of_keypoints, 16/warps_per_block) / block (32, warps_per_block, 1).
  * Cells of the same descriptor write disjoint 8-bin slices of the 128-D vector;
  * meaning that the global memory of the descriptor is partitioned into 16 disjoint 8-bin slices.
  */
@@ -442,7 +316,8 @@ void ext_desc_loop_per_cell_sub( const float         ang,
 
 __global__ void ext_desc_loop_per_cell(int octave, cudaTextureObject_t layer_tex, int w, int h)
 {
-    const int cell      = blockIdx.y; // 0 .. 15
+    //> One warp (threadIdx.y) owns one cell; blockIdx.y selects the cell group.
+    const int cell = blockIdx.y * blockDim.y + threadIdx.y; // 0 .. 15
 
     //> get the keypoint index
     const int o_offset  = dct.ori_ps[octave] + blockIdx.x;
