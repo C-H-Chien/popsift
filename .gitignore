@@ -47,3 +47,12 @@ oxford
 
 # Downloaded archives for tests.
 *.tgz
+
+# Others
+*.txt
+*.csv
+*.nsys-rep
+*.sqlite
+install_bin/
+install_python_bin/
+tests/
