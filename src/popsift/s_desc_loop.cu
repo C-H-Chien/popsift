@@ -15,6 +15,21 @@
 
 using namespace popsift;
 
+// Strength-reduce linearized (i / wx, i % wx): after a "prologue" integer division,
+// walk row-major (jj, ii) by adding the loop stride and wrapping past xmax
+__device__ static inline
+void desc_loop_step_pixel( int& jj, int& ii, const int xmax, const int wx, const int stride )
+{
+    jj += stride;
+    if( wx <= 0 ) {
+        return;
+    }
+    while( jj > xmax ) {
+        jj -= wx;
+        ++ii;
+    }
+}
+
 __device__ static inline
 void ext_desc_loop_sub( const float         ang,
                         const Extremum*     ext,
@@ -88,63 +103,68 @@ void ext_desc_loop_sub( const float         ang,
     float dpt[9] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
 
     //> Loop over all pixels in a bounding box around this cell
-    for( int i = threadIdx.x; popsift::any(i < loops); i+=blockDim.x )
+    int i  = threadIdx.x;
+    int ii = ymin;
+    int jj = xmin;
+    if( wx > 0 ) {
+        ii = ymin + i / wx;
+        jj = xmin + i % wx;
+    }
+    for( ; popsift::any(i < loops); i += blockDim.x )
     {
-        if( i >= loops ) continue;
+        if( i < loops ) {
+            const float2 d = make_float2( jj - ptx, ii - pty );
 
-        const int ii = i / wx + ymin;
-        const int jj = i % wx + xmin;     
+            // const float nx = crsbp * dx + srsbp * dy;
+            // const float ny = crsbp * dy - srsbp * dx;
 
-        const float2 d = make_float2( jj - ptx, ii - pty );
+            //> Map pixels inside the cell to the rotated descriptor coordinates
+            //> and keep only those pixels inside the rotated cell (|nx|, |ny| < 1)
+            const float2 n = make_float2( ::fmaf( crsbp, d.x,  srsbp * d.y ),
+                                        ::fmaf( crsbp, d.y, -srsbp * d.x ) );
+            const float2 nn = abs(n);
+            if (nn.x < 1.0f && nn.y < 1.0f) {
+                float grad_mag;
+                float grad_theta;
+                //> "layer_tex" is the Gaussian pyramid of the octave
+                //> and specifically the corresponding scale level is "level=ext->lpos"
+                //> This get_gradiant() function simply reads from the scale-blurred image
+                //> get_gradiant lives in s_gradiant.h
+                //> CH: I believe this is the bottleneck of computation
+                get_gradiant( grad_mag, grad_theta, jj, ii, layer_tex, level );
 
-        // const float nx = crsbp * dx + srsbp * dy;
-        // const float ny = crsbp * dy - srsbp * dx;
+                const float2 dn = n + offsetpt;
 
-        //> Map pixels inside the cell to the rotated descriptor coordinates
-        //> and keep only those pixels inside the rotated cell (|nx|, |ny| < 1)
-        const float2 n = make_float2( ::fmaf( crsbp, d.x,  srsbp * d.y ),
-                                      ::fmaf( crsbp, d.y, -srsbp * d.x ) );
-        const float2 nn = abs(n);
-        if (nn.x < 1.0f && nn.y < 1.0f) {
-            float grad_mag;
-            float grad_theta;
-            //> "layer_tex" is the Gaussian pyramid of the octave
-            //> and specifically the corresponding scale level is "level=ext->lpos"
-            //> This get_gradiant() function simply reads from the scale-blurred image
-            //> get_gradiant lives in s_gradiant.h
-            //> CH: I believe this is the bottleneck of computation
-            get_gradiant( grad_mag, grad_theta, jj, ii, layer_tex, level );
+                //> Gaussian weight by distance from keypoint
+                // const float  ww = __expf( -scalbnf(dn.x*dn.x + dn.y*dn.y, -3));
+                const float ww  = __expf(-0.125f * (dn.x*dn.x + dn.y*dn.y)); // speedup !
+                const float2 w  = make_float2( 1.0f - nn.x,
+                                            1.0f - nn.y );
+                
+                //> Bilinear weight within the cell
+                const float wgt = ww * w.x * w.y * grad_mag;
 
-            const float2 dn = n + offsetpt;
+                //> Convert to descriptor orientation bin index
+                //> (Orientation relative to keypoint -> 8 bins with linear interpolation)
+                grad_theta -= ang;
+                grad_theta += ( grad_theta <  0.0f  ? M_PI2 : 0.0f ); //  if (grad_theta <  0.0f ) grad_theta += M_PI2;
+                grad_theta -= ( grad_theta >= M_PI2 ? M_PI2 : 0.0f ); //  if (grad_theta >= M_PI2) grad_theta -= M_PI2;
 
-            //> Gaussian weight by distance from keypoint
-            // const float  ww = __expf( -scalbnf(dn.x*dn.x + dn.y*dn.y, -3));
-            const float ww  = __expf(-0.125f * (dn.x*dn.x + dn.y*dn.y)); // speedup !
-            const float2 w  = make_float2( 1.0f - nn.x,
-                                           1.0f - nn.y );
-            
-            //> Bilinear weight within the cell
-            const float wgt = ww * w.x * w.y * grad_mag;
+                const float tth  = __fmul_ru( grad_theta, M_4RPI ); // grad_theta * M_4RPI;
+                const int   fo0  = (int)floorf(tth);
+                const float do0  = tth - fo0;             
+                const float wgt1 = 1.0f - do0;
+                const float wgt2 = do0;
 
-            //> Convert to descriptor orientation bin index
-            //> (Orientation relative to keypoint -> 8 bins with linear interpolation)
-            grad_theta -= ang;
-            grad_theta += ( grad_theta <  0.0f  ? M_PI2 : 0.0f ); //  if (grad_theta <  0.0f ) grad_theta += M_PI2;
-            grad_theta -= ( grad_theta >= M_PI2 ? M_PI2 : 0.0f ); //  if (grad_theta >= M_PI2) grad_theta -= M_PI2;
-
-            const float tth  = __fmul_ru( grad_theta, M_4RPI ); // grad_theta * M_4RPI;
-            const int   fo0  = (int)floorf(tth);
-            const float do0  = tth - fo0;             
-            const float wgt1 = 1.0f - do0;
-            const float wgt2 = do0;
-
-            int fo  = fo0 % DESC_BINS;
-    
-                // maf: multiply-add
-                // _ru - round to positive infinity equiv to froundf since always >=0
-            dpt[fo]   = __fmaf_ru( wgt1, wgt, dpt[fo] );   // dpt[fo]   += (wgt1*wgt);
-            dpt[fo+1] = __fmaf_ru( wgt2, wgt, dpt[fo+1] ); // dpt[fo+1] += (wgt2*wgt);
+                int fo  = fo0 % DESC_BINS;
+        
+                    // maf: multiply-add
+                    // _ru - round to positive infinity equiv to froundf since always >=0
+                dpt[fo]   = __fmaf_ru( wgt1, wgt, dpt[fo] );   // dpt[fo]   += (wgt1*wgt);
+                dpt[fo+1] = __fmaf_ru( wgt2, wgt, dpt[fo+1] ); // dpt[fo+1] += (wgt2*wgt);
+            }
         }
+        desc_loop_step_pixel( jj, ii, xmax, wx, (int)blockDim.x );
     }
     __syncthreads();
 
@@ -257,13 +277,16 @@ void ext_desc_loop_per_cell_sub( const float         ang,
 
     float dpt[9] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
 
-    for( int i = threadIdx.x; popsift::any(i < loops); i += blockDim.x )
+    int i  = threadIdx.x;
+    int ii = ymin;
+    int jj = xmin;
+    if( wx > 0 ) {
+        ii = ymin + i / wx;
+        jj = xmin + i % wx;
+    }
+    for( ; popsift::any(i < loops); i += blockDim.x )
     {
-        if( i >= loops ) continue;
-
-        const int ii = i / wx + ymin;
-        const int jj = i % wx + xmin;
-
+        if( i < loops ) {
         const float2 d  = make_float2( jj - ptx, ii - pty );
         const float2 n  = make_float2( ::fmaf( crsbp, d.x,  srsbp * d.y ),
                                        ::fmaf( crsbp, d.y, -srsbp * d.x ) );
@@ -294,6 +317,8 @@ void ext_desc_loop_per_cell_sub( const float         ang,
             dpt[fo]   = __fmaf_ru( wgt1, wgt, dpt[fo] );
             dpt[fo+1] = __fmaf_ru( wgt2, wgt, dpt[fo+1] );
         }
+        }
+        desc_loop_step_pixel( jj, ii, xmax, wx, (int)blockDim.x );
     }
 
     dpt[0] += dpt[8];
@@ -314,8 +339,7 @@ void ext_desc_loop_per_cell_sub( const float         ang,
     }
 }
 
-__global__ 
-__launch_bounds__(32, 8)
+__global__
 void ext_desc_loop_per_cell(int octave, cudaTextureObject_t layer_tex, int w, int h)
 {
     //> One warp (threadIdx.y) owns one cell; blockIdx.y selects the cell group.
@@ -397,13 +421,16 @@ void ext_desc_loop_per_cell_multiwarp_sub( const float         ang,
 
     float dpt[9] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
 
-    for( int i = threadIdx.x; popsift::any(i < loops); i += blockDim.x )
+    int i  = threadIdx.x;
+    int ii = ymin;
+    int jj = xmin;
+    if( wx > 0 ) {
+        ii = ymin + i / wx;
+        jj = xmin + i % wx;
+    }
+    for( ; popsift::any(i < loops); i += blockDim.x )
     {
-        if( i >= loops ) continue;
-
-        const int ii = i / wx + ymin;
-        const int jj = i % wx + xmin;
-
+        if( i < loops ) {
         const float2 d  = make_float2( jj - ptx, ii - pty );
         const float2 n  = make_float2( ::fmaf( crsbp, d.x,  srsbp * d.y ),
                                        ::fmaf( crsbp, d.y, -srsbp * d.x ) );
@@ -434,6 +461,8 @@ void ext_desc_loop_per_cell_multiwarp_sub( const float         ang,
             dpt[fo]   = __fmaf_ru( wgt1, wgt, dpt[fo] );
             dpt[fo+1] = __fmaf_ru( wgt2, wgt, dpt[fo+1] );
         }
+        }
+        desc_loop_step_pixel( jj, ii, xmax, wx, (int)blockDim.x );
     }
 
     dpt[0] += dpt[8];
@@ -519,12 +548,12 @@ struct DescTexRegs
 
 //> Geometry + four neighbor texture reads. Leaves tex latency outstanding
 //  until the returned neighbor values are consumed by complete().
+//  (jj, ii) is the strength-reduced pixel; callers walk it with desc_loop_step_pixel.
 __device__ static inline
 void ext_desc_loop_prefetch_issue( const int           i,
                                    const int           loops,
-                                   const int           wx,
-                                   const int           xmin,
-                                   const int           ymin,
+                                   const int           jj,
+                                   const int           ii,
                                    const float         ptx,
                                    const float         pty,
                                    const float         crsbp,
@@ -547,16 +576,14 @@ void ext_desc_loop_prefetch_issue( const int           i,
         return;
     }
 
-    const int ii = i / wx + ymin;
-    const int jj = i % wx + xmin;
-
     const float2 d  = make_float2( jj - ptx, ii - pty );
     const float2 n  = make_float2( ::fmaf( crsbp, d.x,  srsbp * d.y ),
                                    ::fmaf( crsbp, d.y, -srsbp * d.x ) );
     const float2 nn = abs(n);
 
+    //>  If this pixel is in the rotated cell
     if( nn.x < 1.0f && nn.y < 1.0f ) {
-        //> Same four taps as get_gradiant(), issued before curr arithmetic.
+        //> Do the same four texture reads as get_gradiant(), issued before curr arithmetic
         t_xm  = readTex( layer_tex, jj - 1.0f, ii,        level );
         t_xp  = readTex( layer_tex, jj + 1.0f, ii,        level );
         t_ym  = readTex( layer_tex, jj,        ii - 1.0f, level );
@@ -677,9 +704,15 @@ void ext_desc_loop_per_cell_prefetch_sub( const float         ang,
     float n_nx = 0.0f, n_ny = 0.0f;
     int   n_valid = 0;
 
-    //> --- PROLOGUE ---
-    int i = lane;
-    ext_desc_loop_prefetch_issue( i, loops, wx, xmin, ymin,
+    int i  = lane;
+    int ii = ymin;
+    int jj = xmin;
+    if( wx > 0 ) {
+        ii = ymin + i / wx;
+        jj = xmin + i % wx;
+    }
+    //> Issue the "first" texture read early (results sit in the registers n_*)
+    ext_desc_loop_prefetch_issue( i, loops, jj, ii,
                                   ptx, pty, crsbp, srsbp,
                                   layer_tex, level,
                                   n_xm, n_xp, n_ym, n_yp,
@@ -687,29 +720,31 @@ void ext_desc_loop_per_cell_prefetch_sub( const float         ang,
     ext_desc_loop_prefetch_complete( n_xm, n_xp, n_ym, n_yp,
                                      n_nx, n_ny, n_valid, tex_curr );
 
-    //> --- MAIN LOOP ---
     for( ; popsift::any( i + 32 < loops ); i += 32 ) {
-        //> Issue NEXT texture reads early (results sit in n_* registers).
-        ext_desc_loop_prefetch_issue( i + 32, loops, wx, xmin, ymin,
+        desc_loop_step_pixel( jj, ii, xmax, wx, 32 );
+
+        //> Issue "next" texture reads early (results sit in n_* registers)
+        ext_desc_loop_prefetch_issue( i + 32, loops, jj, ii,
                                       ptx, pty, crsbp, srsbp,
                                       layer_tex, level,
                                       n_xm, n_xp, n_ym, n_yp,
                                       n_nx, n_ny, n_valid );
 
-        //> Work on CURR while the texture unit services NEXT.
+        //> Work on CURR while the texture unit services NEXT
+        //> Here we do the Gaussian + bilinear weights and an orientation binning into dpt
         ext_desc_loop_prefetch_accumulate( tex_curr, ang, offsetpt, dpt );
 
-        //> Consume NEXT tex regs into a finished sample, then shift.
+        //> Consume NEXT tex regs into a finished sample, then shift
         ext_desc_loop_prefetch_complete( n_xm, n_xp, n_ym, n_yp,
                                          n_nx, n_ny, n_valid, tex_next );
         tex_curr = tex_next;
     }
 
-    //> --- EPILOGUE ---
     ext_desc_loop_prefetch_accumulate( tex_curr, ang, offsetpt, dpt );
 
     dpt[0] += dpt[8];
 
+    //> Same warp shuffling as in the regular loop
     for( int k = 0; k < 8; k++ ) {
         dpt[k] += popsift::shuffle_down( dpt[k], 16 );
         dpt[k] += popsift::shuffle_down( dpt[k], 8 );
