@@ -33,6 +33,7 @@ option(PopSift_ERRCHK_AFTER_KERNEL     "Synchronize and check CUDA error after e
 option(PopSift_USE_POSITION_INDEPENDENT_CODE "Generate position independent code." ON)
 option(PopSift_USE_GRID_FILTER "Switch off grid filtering to massively reduce compile time while debugging other things." ON)
 option(PopSift_NVCC_WARNINGS "Switch on several additional warning for CUDA nvcc" OFF)
+option(PopSift_USE_FAST_MATH "Compile CUDA device code with nvcc --use_fast_math." ON)
 option(PopSift_USE_TEST_CMD "Add testing step for functional verification" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
@@ -111,6 +112,13 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 # currently, the code requires legacy mode
 list(APPEND CUDA_NVCC_FLAGS "--default-stream;legacy")
 # set(CUDA_NVCC_FLAGS         "${CUDA_NVCC_FLAGS};--default-stream;per-thread")
+
+if(PopSift_USE_FAST_MATH)
+  # nvcc name is --use_fast_math (not gcc -ffast-math): FTZ, fast div/sqrt, and
+  # sinf/expf/... map to the device intrinsics.
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --use_fast_math")
+  list(APPEND CUDA_NVCC_FLAGS "--use_fast_math")
+endif()
 
 if(CUDA_VERSION VERSION_GREATER_EQUAL "7.5")
   if(PopSift_NVCC_WARNINGS)
@@ -195,6 +203,7 @@ message(STATUS "Generate position independent code: " ${CMAKE_POSITION_INDEPENDE
 message(STATUS "Synchronize and check CUDA error after every kernel: " ${PopSift_ERRCHK_AFTER_KERNEL})
 message(STATUS "Grid filtering: " ${PopSift_USE_GRID_FILTER})
 message(STATUS "Additional warning for CUDA nvcc: " ${PopSift_NVCC_WARNINGS})
+message(STATUS "CUDA --use_fast_math: " ${PopSift_USE_FAST_MATH})
 message(STATUS "Install path: " ${CMAKE_INSTALL_PREFIX})
 message(STATUS "Testing step: " ${PopSift_USE_TEST_CMD})
 
