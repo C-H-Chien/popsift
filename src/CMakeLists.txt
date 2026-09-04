@@ -50,6 +50,10 @@ set_target_properties(popsift PROPERTIES VERSION ${PROJECT_VERSION})
 set_target_properties(popsift PROPERTIES DEBUG_POSTFIX "d")
 set_target_properties(popsift PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
+if(PopSift_USE_FAST_MATH)
+  target_compile_options(popsift PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>)
+endif()
+
 # build directory containing the automatically generated files
 set(popsift_generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
 

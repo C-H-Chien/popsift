@@ -531,7 +531,7 @@ __global__ void ext_desc_loop_per_cell_multiwarp(int octave, cudaTextureObject_t
  *   prologue:  issue+complete fetch(i) -> tex_curr
  *   loop:      issue 4 tex reads for i+32 into next_* regs
  *              accumulate(tex_curr)          // hides next tex latency
- *              complete next_* -> tex_next   // hypot/atan2 uses the regs
+ *              complete next_* -> tex_next   // mag + 8-bin ori, uses the tex regs
  *              tex_curr = tex_next
  *   epilogue:  accumulate(tex_curr)
  *
@@ -540,11 +540,36 @@ __global__ void ext_desc_loop_per_cell_multiwarp(int octave, cudaTextureObject_t
 struct DescTexRegs
 {
     float mag;
-    float theta;
+    float ori_bin; // [0, DESC_BINS) from (dx,dy); not radians
     float nx;
     float ny;
     int   valid;
 };
+
+// Map gradient (dx, dy) to an 8-bin orientation coordinate in [0, 8).
+// Octant from signs / |dx| vs |dy|; fraction is min/max (tan of the 45-deg
+// octant), not atan2. Exact at 45-deg boundaries; ~4 deg error at octant mid.
+__device__ static inline
+float desc_ori_bin_from_grad( const float dx, const float dy )
+{
+    const float ax = fabsf( dx );
+    const float ay = fabsf( dy );
+    const float mx = fmaxf( ax, ay );
+    const float mn = fminf( ax, ay );
+    const float t  = ( mx > 0.0f ) ? ( mn * __frcp_rn( mx ) ) : 0.0f;
+
+    float bin;
+    if( ay <= ax ) {
+        bin = ( dx < 0.0f )
+            ? ( ( dy < 0.0f ) ? ( 4.0f + t ) : ( 4.0f - t ) )
+            : ( ( dy < 0.0f ) ? ( 8.0f - t ) : t );
+    } else {
+        bin = ( dy >= 0.0f )
+            ? ( ( dx < 0.0f ) ? ( 2.0f + t ) : ( 2.0f - t ) )
+            : ( ( dx < 0.0f ) ? ( 6.0f - t ) : ( 6.0f + t ) );
+    }
+    return ( bin >= 8.0f ) ? ( bin - 8.0f ) : bin;
+}
 
 //> Geometry + four neighbor texture reads. Leaves tex latency outstanding
 //  until the returned neighbor values are consumed by complete().
@@ -608,19 +633,19 @@ void ext_desc_loop_prefetch_complete( const float t_xm,
     s.ny    = ny;
     s.valid = valid;
     if( !valid ) {
-        s.mag   = 0.0f;
-        s.theta = 0.0f;
+        s.mag     = 0.0f;
+        s.ori_bin = 0.0f;
         return;
     }
     const float dx = t_xp - t_xm;
     const float dy = t_yp - t_ym;
-    s.mag   = hypotf( dx, dy );
-    s.theta = atan2f( dy, dx );
+    s.mag     = __fsqrt_rn( ::fmaf( dx, dx, dy * dy ) );
+    s.ori_bin = desc_ori_bin_from_grad( dx, dy );
 }
 
 __device__ static inline
 void ext_desc_loop_prefetch_accumulate( const DescTexRegs& s,
-                                        const float        ang,
+                                        const float        ang_bin,
                                         const float2       offsetpt,
                                         float              dpt[9] )
 {
@@ -636,12 +661,11 @@ void ext_desc_loop_prefetch_accumulate( const DescTexRegs& s,
     const float2 w   = make_float2( 1.0f - nn.x, 1.0f - nn.y );
     const float  wgt = ww * w.x * w.y * s.mag;
 
-    float grad_theta = s.theta;
-    grad_theta -= ang;
-    grad_theta += ( grad_theta <  0.0f  ? M_PI2 : 0.0f );
-    grad_theta -= ( grad_theta >= M_PI2 ? M_PI2 : 0.0f );
+    // ori_bin and ang_bin are in DESC_BINS units (ang may be in [-pi, pi)).
+    float tth = s.ori_bin - ang_bin;
+    tth += ( tth <  0.0f ? 8.0f : 0.0f );
+    tth -= ( tth >= 8.0f ? 8.0f : 0.0f );
 
-    const float tth  = __fmul_ru( grad_theta, M_4RPI );
     const int   fo0  = (int)floorf(tth);
     const float do0  = tth - fo0;
     const float wgt1 = 1.0f - do0;
@@ -681,6 +705,7 @@ void ext_desc_loop_per_cell_prefetch_sub( const float         ang,
     const float srsbp = sin_t / SBP;
 
     const float2 offsetpt = make_float2( ix - 1.5f, iy - 1.5f );
+    const float  ang_bin  = ang * M_4RPI;
 
     const float ptx = ::fmaf( csbp, offsetpt.x, ::fmaf( -ssbp, offsetpt.y, x ) );
     const float pty = ::fmaf( csbp, offsetpt.y, ::fmaf(  ssbp, offsetpt.x, y ) );
@@ -732,7 +757,7 @@ void ext_desc_loop_per_cell_prefetch_sub( const float         ang,
 
         //> Work on CURR while the texture unit services NEXT
         //> Here we do the Gaussian + bilinear weights and an orientation binning into dpt
-        ext_desc_loop_prefetch_accumulate( tex_curr, ang, offsetpt, dpt );
+        ext_desc_loop_prefetch_accumulate( tex_curr, ang_bin, offsetpt, dpt );
 
         //> Consume NEXT tex regs into a finished sample, then shift
         ext_desc_loop_prefetch_complete( n_xm, n_xp, n_ym, n_yp,
@@ -740,7 +765,7 @@ void ext_desc_loop_per_cell_prefetch_sub( const float         ang,
         tex_curr = tex_next;
     }
 
-    ext_desc_loop_prefetch_accumulate( tex_curr, ang, offsetpt, dpt );
+    ext_desc_loop_prefetch_accumulate( tex_curr, ang_bin, offsetpt, dpt );
 
     dpt[0] += dpt[8];
 
